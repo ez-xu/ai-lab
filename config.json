@@ -1,0 +1,11 @@
+﻿{
+    "enabled":  true,
+    "time":  "07:30",
+    "timeBudgetMinutes":  120,
+    "focus":  "1 breadth + 1 framework",
+    "level":  "L2",
+    "profile":  "headless",
+    "dshPath":  "C:\\Users\\15854\\AppData\\Roaming\\npm\\dsh.ps1",
+    "root":  "C:\\Users\\15854\\ai-lab",
+    "taskName":  "AI-Lab-Daily-TwoTasks"
+}
