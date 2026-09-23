@@ -8,6 +8,29 @@
 领域不限，广度题从 **60 个领域**里抽签。**只在周一至周五出题**，周六、周日、法定节假日休息。
 默认 **7:30** 自动生成，可一键开关。
 
+## 快速开始
+
+**依赖**：Windows 10/11 + PowerShell 5.1（系统自带）+ 一个能跑 headless 的 `dsh`（在 PATH 里）。
+出题这一步本质是 `dsh --profile headless <提示词>`，没有 DSH 就只能手动出题。
+
+```powershell
+git clone https://github.com/<你的账号>/ai-lab.git
+cd ai-lab
+
+# 1) 自检：抽签 31 项断言 + 日历 35 个用例（不需要 dsh）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-pick.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-calendar.ps1
+
+# 2) 注册计划任务：把 dsh 路径写进 config.json，并注册「周一至周五 07:30」
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\install-task.ps1
+
+# 3) 立刻出今天的题
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\daily-generate.ps1
+```
+
+首次运行会自动从 `config.example.json` 生成 `config.json`——**它不入库**，因为里面是本机路径。
+换出题时间用 `install-task.ps1 -At 08:00`；不想装计划任务就只手动跑第 3 步。
+
 ## 每天的四题
 
 | 题号 | 类型 | 时间盒 | 练什么 |
@@ -59,22 +82,26 @@
 ```
 ai-lab\
 ├─ README.md               ← 本文件
+├─ LICENSE                 ← MIT
 ├─ CHANGELOG.md            ← 版本历史
 ├─ CURRICULUM.md           ← 课程体系：四题结构、4 根抽签轴、60 领域池、能力阶梯、硬规则
 ├─ PROGRESS.md             ← 打卡表 + 当前档位 + 连击
 ├─ queue.md                ← 种子题库 & 你想练的方向（可随时增删）
-├─ config.json             ← 开关与参数（enabled / time / level / taskName ...）
+├─ config.example.json     ← 配置模板（首次运行会复制成 config.json）
+├─ config.json             ← 开关与参数（enabled / time / level / taskName ...）· 不入库
 ├─ holidays.json           ← 出题日历：法定节假日 + 例外上班/休息日
-├─ daily\YYYY-MM-DD.md     ← 每天四题（含验收标准、提示、复盘问题）
-├─ daily\YYYY-MM-DD\       ← 你当天的产物（A1\ A2\ B1\ B2\）
-├─ state\history.json      ← 抽签历史（冷却期的依据；删掉 = 重置冷却）
+├─ examples\               ← 一份样例产出（脱敏，用 {{ROOT}} 占位）
+├─ daily\YYYY-MM-DD.md     ← 每天四题（含验收标准、提示、复盘问题）· 不入库
+├─ daily\YYYY-MM-DD\       ← 你当天的产物（A1\ A2\ B1\ B2\）· 不入库
+├─ state\history.json      ← 抽签历史（冷却期的依据；删掉 = 重置冷却）· 不入库
 ├─ templates\daily-task.md ← 出题模板
-├─ reviews\                ← 复盘归档
-├─ logs\                   ← 运行日志（已 gitignore）
+├─ reviews\                ← 复盘归档 · 不入库
+├─ logs\                   ← 运行日志 · 不入库
 └─ tools\                  ← 所有可执行工具
     ├─ pools.json              ← ★ 抽签池：60 领域 + 28 形态 + 12 载体 + 16 约束 + 冷却窗口
     ├─ pick.ps1                ← ★ 抽签引擎（按日期确定性抽，含冷却期防重复）
     ├─ prompt.md               ← 出题教练的提示词（想改出题风格就改这里）
+    ├─ config.ps1              ← 配置读取（config.json 缺失时从模板自动生成）
     ├─ calendar.ps1            ← 出题日历判定（生成器与开关共用）
     ├─ daily-generate.ps1      ← 生成器（计划任务调用）
     ├─ test-pick.ps1           ← 抽签自检（31 项断言 + 覆盖率报告）
@@ -85,6 +112,10 @@ ai-lab\
     ├─ version.ps1             ← 版本管理（status / bump / log）
     └─ AI-Lab开关.cmd          ← 双击入口
 ```
+
+> **为什么有些文件不入库**：`config.json` 含本机 `dsh` 路径，`daily\` / `state\` 是你自己的
+> 产出与运行态。它们留在本地但不进版本控制，所以克隆别人的仓库不会带上他的机器路径，
+> 你也不会把自己的做题记录推到公开仓库。想看产出长什么样，读 `examples\`。
 
 ## 自动化说明
 
@@ -181,3 +212,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\version.ps1 -Action 
 1. 每题必须落产物 + 有真实运行输出（"应该能跑"不算）
 2. 主修题至少 5 行设计/机制说明（只写码不写想 = 只完成一半）
 3. 时间盒到点就停，没做完写"卡在哪"比硬做完更有价值
+
+## 许可
+
+MIT，见 `LICENSE`。
