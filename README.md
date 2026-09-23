@@ -5,7 +5,7 @@
 - **眼界** —— 见过多少系统原型（题 A，广度）
 - **框架能力** —— 能不能自己搭起结构（题 B，框架）
 
-领域不限，广度题按 **18 个领域**轮换。**只在周一至周五出题**，周六、周日、法定节假日休息。
+领域不限，广度题从 **60 个领域**里抽签。**只在周一至周五出题**，周六、周日、法定节假日休息。
 默认 **7:30** 自动生成，可一键开关。
 
 ## 每天的四题
@@ -19,12 +19,36 @@
 
 合计 130–180 分钟。**时间不够按 A1 → B1 → A2 → B2 的顺序停**，并在 `PROGRESS.md` 写清停在哪。
 
+## 题目是怎么抽出来的
+
+每天的四道题由 **4 根轴**组合而成，全部由 `tools\pick.ps1` 按日期确定性抽出：
+
+| 轴 | 池子 | 说明 |
+|---|---|---|
+| **领域** | 60 | 今天碰哪个方向（只有 A 题绑领域） |
+| **形态** | A 12 种 / B 16 种 | 这题是什么打法（拆经典 / 源码走读 / 接口设计 / 失败模式设计…） |
+| **载体** | 12 | 从哪里取材（源码 / 论文 / RFC / 手册 / 事故复盘 / 你自己的代码…） |
+| **约束** | 16 | 加一条硬性做法（必须度量 / 零依赖 / 必须给反例…） |
+
+**为什么不让 AI 自己选题**：模型自由选题时有很强的先验，会反复落回数据库 / 操作系统 / 网络
+这几个它最熟的领域——池子从 18 扩到 60 也没用，瓶颈不是池子而是采样的人。所以选题权被拿走了。
+
+抽签的三个性质：
+
+- **确定性**：同一日期 + 同一历史 → 永远同一组结果（可复现、可回归测试）
+- **看起来随机**：排序键是 `SHA256(日期|题位|轴|候选id)`，不是简单轮转
+- **有冷却期**：领域 56 抽内不重复（30 个工作日覆盖 59/60 个领域）、载体 8 抽、约束 6 抽
+- **同日不重复是硬保证**：四题的载体、约束互不相同，A1/A2 领域不同
+
+改池子或冷却窗口 → 编辑 `tools\pools.json`，然后跑 `tools\test-pick.ps1`（31 项断言）。
+
 ## 怎么用
 
 | 场景 | 做法 |
 |---|---|
 | 早上打开电脑 | 直接看 `daily\<今天日期>.md`（工作日 7:30 已自动生成） |
 | 想立刻要 / 自动生成失败了 | 在 DSH GUI 里说一句：**布置今天的任务** |
+| 想看今天会抽到什么 | `tools\pick.ps1`（不带参数 = 今天；加 `-NoWrite` 只看不记） |
 | 写完了 | 说 **复盘 2026-09-23**（换成当天日期），我会按验收标准逐条核对并调难度 |
 | 想开关自动化 | 双击 `tools\AI-Lab开关.cmd`，或说"关掉每日任务自动生成" |
 | 周末想加练 | `tools\AI-Lab开关.cmd` → 选 4（忽略日历强制出题） |
@@ -36,20 +60,26 @@
 ai-lab\
 ├─ README.md               ← 本文件
 ├─ CHANGELOG.md            ← 版本历史
-├─ CURRICULUM.md           ← 课程体系：四题结构、18 领域池、A1–A6 / B1–B8 形态、能力阶梯、硬规则
+├─ CURRICULUM.md           ← 课程体系：四题结构、4 根抽签轴、60 领域池、能力阶梯、硬规则
 ├─ PROGRESS.md             ← 打卡表 + 当前档位 + 连击
 ├─ queue.md                ← 种子题库 & 你想练的方向（可随时增删）
 ├─ config.json             ← 开关与参数（enabled / time / level / taskName ...）
 ├─ holidays.json           ← 出题日历：法定节假日 + 例外上班/休息日
 ├─ daily\YYYY-MM-DD.md     ← 每天四题（含验收标准、提示、复盘问题）
 ├─ daily\YYYY-MM-DD\       ← 你当天的产物（A1\ A2\ B1\ B2\）
+├─ state\history.json      ← 抽签历史（冷却期的依据；删掉 = 重置冷却）
 ├─ templates\daily-task.md ← 出题模板
 ├─ reviews\                ← 复盘归档
 ├─ logs\                   ← 运行日志（已 gitignore）
 └─ tools\                  ← 所有可执行工具
+    ├─ pools.json              ← ★ 抽签池：60 领域 + 28 形态 + 12 载体 + 16 约束 + 冷却窗口
+    ├─ pick.ps1                ← ★ 抽签引擎（按日期确定性抽，含冷却期防重复）
     ├─ prompt.md               ← 出题教练的提示词（想改出题风格就改这里）
     ├─ calendar.ps1            ← 出题日历判定（生成器与开关共用）
     ├─ daily-generate.ps1      ← 生成器（计划任务调用）
+    ├─ test-pick.ps1           ← 抽签自检（31 项断言 + 覆盖率报告）
+    ├─ test-calendar.ps1       ← 日历自检（35 个已知用例）
+    ├─ normalize-encoding.ps1  ← 编码规范化（.ps1 补 BOM / .json 去 BOM）
     ├─ toggle.ps1              ← 开关 / 状态 / 日历预览
     ├─ install-task.ps1        ← 注册/重装 Windows 计划任务
     ├─ version.ps1             ← 版本管理（status / bump / log）
@@ -83,9 +113,38 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\toggle.ps1 -Action o
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\toggle.ps1 -Action status
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\toggle.ps1 -Action calendar -Days 21
 
+# 抽签：看今天 / 看指定日期 / 只看不记 / 看未来一周
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\pick.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\pick.ps1 -Date 2026-09-28 -NoWrite
+
+# 自检：抽签 31 项断言 + 覆盖率报告 / 日历 35 个用例
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-pick.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-calendar.ps1
+
+# 改完 tools\ 下的 .ps1 后修编码（PS 5.1 会把无 BOM 的 UTF-8 当 GBK）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\normalize-encoding.ps1
+
 # 重装计划任务（换时间：-At 08:00）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\install-task.ps1
 ```
+
+### 改抽签范围
+
+想加领域、加形态、调防重复力度，都改 `tools\pools.json` 一个文件：
+
+```jsonc
+"cooldown": {
+  "domain": 56,        // 领域 56 抽内不重复（30 个工作日覆盖 59/60 个领域）
+  "aFormMain": 5, "aFormQuick": 5,
+  "bFormMain": 8, "bFormQuick": 6,
+  "carrier": 8, "twist": 6
+}
+```
+
+改完**必须**跑 `tools\test-pick.ps1`。里面有一条容量断言：池子必须比冷却窗口大得够多，
+否则快练题会被锁死（这个坑踩过一次，所以固化成断言了）。
+
+> 想重置冷却期：删掉 `state\history.json` 即可（下次出题从零开始）。
 
 ### 节假日怎么维护
 

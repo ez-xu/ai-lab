@@ -1,0 +1,46 @@
+{
+    "version":  1,
+    "entries":  [
+                    {
+                        "date":  "2026-09-23",
+                        "picks":  {
+                                      "A1":  {
+                                                 "slot":  "A1",
+                                                 "role":  "广度",
+                                                 "tier":  "主修",
+                                                 "domain":  "d34",
+                                                 "form":  "A3",
+                                                 "carrier":  "c05",
+                                                 "twist":  "t16"
+                                             },
+                                      "A2":  {
+                                                 "slot":  "A2",
+                                                 "role":  "广度",
+                                                 "tier":  "快练",
+                                                 "domain":  "d58",
+                                                 "form":  "A12",
+                                                 "carrier":  "c01",
+                                                 "twist":  "t12"
+                                             },
+                                      "B1":  {
+                                                 "slot":  "B1",
+                                                 "role":  "框架",
+                                                 "tier":  "主修",
+                                                 "domain":  null,
+                                                 "form":  "B1",
+                                                 "carrier":  "c08",
+                                                 "twist":  "t15"
+                                             },
+                                      "B2":  {
+                                                 "slot":  "B2",
+                                                 "role":  "框架",
+                                                 "tier":  "快练",
+                                                 "domain":  null,
+                                                 "form":  "B6",
+                                                 "carrier":  "c12",
+                                                 "twist":  "t13"
+                                             }
+                                  }
+                    }
+                ]
+}
