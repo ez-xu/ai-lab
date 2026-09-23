@@ -19,8 +19,9 @@ $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 $root     = Split-Path -Parent $PSScriptRoot
-$cfgPath  = Join-Path $root 'config.json'
-$cfg      = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'config.ps1')
+$cfgPath  = Get-AiLabConfigPath -Root $root
+$cfg      = Get-AiLabConfig -Root $root
 $taskName = if ($cfg.taskName) { $cfg.taskName } else { 'AI-Lab-Daily-FourTasks' }
 $script   = Join-Path $PSScriptRoot 'daily-generate.ps1'
 $psExe    = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'

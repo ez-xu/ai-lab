@@ -24,7 +24,6 @@ $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 $root    = Split-Path -Parent $PSScriptRoot
-$cfgPath = Join-Path $root 'config.json'
 $logDir  = Join-Path $root 'logs'
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
 
@@ -41,6 +40,9 @@ function Write-Log {
     Write-Host $line
 }
 
+# 配置读取：config.json 不入库（含机器相关路径），缺失时从 config.example.json 自动生成
+. (Join-Path $PSScriptRoot 'config.ps1')
+
 # 日历判定逻辑放在 calendar.ps1，与 toggle.ps1 共用
 . (Join-Path $PSScriptRoot 'calendar.ps1')
 
@@ -49,9 +51,8 @@ function Write-Log {
 . (Join-Path $PSScriptRoot 'pick.ps1') -Library
 
 # ---------- 1. 读配置 ----------
-if (-not (Test-Path $cfgPath)) { Write-Log "找不到配置文件：$cfgPath"; exit 1 }
-try { $cfg = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json }
-catch { Write-Log "配置解析失败：$_"; exit 1 }
+try { $cfg = Get-AiLabConfig -Root $root -Quiet }
+catch { Write-Log "配置读取失败：$_"; exit 1 }
 
 if (-not $Force -and -not $cfg.enabled) {
     Write-Log '自动生成已关闭（config.json → enabled=false），跳过。'
@@ -130,6 +131,9 @@ if ($pick.warnings.Count -gt 0) { Write-Log ("  抽签告警：" + ($pick.warnin
 $prompt = Get-Content $promptPath -Raw -Encoding UTF8
 $prompt = $prompt.Replace('{{ASSIGNMENT}}', $assignment)
 $prompt = $prompt.Replace('{{DATE}}', $day).Replace('{{WEEKDAY}}', $weekday).Replace('{{N}}', [string]$dayNo)
+# {{ROOT}} → 真实仓库路径。prompt.md 与 templates\daily-task.md 都用它作占位符，
+# 好处是仓库里不出现任何机器绝对路径（换台机器克隆下来照样能用）。
+$prompt = $prompt.Replace('{{ROOT}}', $root)
 # 压成单行，避免命令行参数里的换行在 shim 转发时出问题
 $prompt = ($prompt -replace '\s*\r?\n\s*', ' ').Trim()
 

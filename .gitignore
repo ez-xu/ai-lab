@@ -2,6 +2,16 @@
 logs/
 *.log
 
+# ---- 机器相关配置（不入库）----
+# config.json 里是本机的 dsh 路径；首次运行会从 config.example.json 自动生成一份
+config.json
+
+# ---- 个人产出与运行态（不入库；样例见 examples/）----
+# 想让自己的每日题目与产物也进版本控制，删掉下面三行即可
+state/
+daily/
+reviews/
+
 # ---- 做题时的构建产物 ----
 build/
 node_modules/

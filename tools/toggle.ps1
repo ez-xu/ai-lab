@@ -17,13 +17,16 @@ param(
 $ErrorActionPreference = 'Continue'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
-$root    = Split-Path -Parent $PSScriptRoot
-$cfgPath = Join-Path $root 'config.json'
+$root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'config.ps1')
 . (Join-Path $PSScriptRoot 'calendar.ps1')
 
+# config.json 不入库（含机器相关路径），缺失时由 Get-AiLabConfig 从 config.example.json 生成
+$cfgPath = Get-AiLabConfigPath -Root $root
+
 function Read-Cfg {
-    if (-not (Test-Path $cfgPath)) { throw "找不到配置文件：$cfgPath" }
-    return (Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+    # 不传 -Quiet：首次运行时让用户看到"已从模板创建 config.json"
+    return (Get-AiLabConfig -Root $root)
 }
 function Save-Cfg($cfg) {
     # 用「无 BOM 的 UTF-8」写回：PowerShell 5.1 的 Set-Content -Encoding UTF8 会加 BOM，
