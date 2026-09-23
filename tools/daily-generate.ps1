@@ -1,15 +1,22 @@
 ﻿<#
-  daily-generate.ps1 — 生成当天的两道任务（AI-Lab 每日两题）
+  daily-generate.ps1 — 生成当天的四道任务（AI-Lab 每日四题）
 
-  调用方：Windows 计划任务 AI-Lab-Daily-TwoTasks（每天 07:30）
+  调用方：Windows 计划任务 AI-Lab-Daily-FourTasks（周一至周五 07:30）
   手动用法：
-      powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\daily-generate.ps1
-      powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\daily-generate.ps1 -Force
-      powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\daily-generate.ps1 -Date 2026-09-24
+      powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\daily-generate.ps1
+      powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\daily-generate.ps1 -Force
+      powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\daily-generate.ps1 -Date 2026-09-28
+      powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\daily-generate.ps1 -Force -IgnoreCalendar
+        └ 周末 / 法定节假日也照出（加练用）
+
+  出题日历：holidays.json
+      判定顺序 = extraWorkdays（例外上班）→ extraRestDays（例外休息）→ 周六周日 → holidays（法定节假日）
+      调休上班日（都是周末）按「周六休息」处理，只在文件里记录备查。
 #>
 [CmdletBinding()]
 param(
     [switch]$Force,
+    [switch]$IgnoreCalendar,
     [string]$Date
 )
 
@@ -34,6 +41,9 @@ function Write-Log {
     Write-Host $line
 }
 
+# 日历判定逻辑放在 calendar.ps1，与 toggle.ps1 共用
+. (Join-Path $PSScriptRoot 'calendar.ps1')
+
 # ---------- 1. 读配置 ----------
 if (-not (Test-Path $cfgPath)) { Write-Log "找不到配置文件：$cfgPath"; exit 1 }
 try { $cfg = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json }
@@ -44,7 +54,24 @@ if (-not $Force -and -not $cfg.enabled) {
     exit 0
 }
 
-# ---------- 2. 幂等检查 ----------
+$weekday = $dayDate.ToString('dddd', [System.Globalization.CultureInfo]::GetCultureInfo('zh-CN'))
+
+# ---------- 2. 工作日 / 节假日判定 ----------
+$calName = if ($cfg.holidaysFile) { $cfg.holidaysFile } else { 'holidays.json' }
+$calPath = Join-Path $root $calName
+$cal     = Get-AiLabCalendar -Path $calPath
+if (-not $cal) { Write-Log "日历文件缺失或解析失败：$calPath（本次只按周末判定）" }
+
+if (-not $IgnoreCalendar -and $cfg.workdaysOnly -ne $false) {
+    $kind = Get-DayKind -When $dayDate -Calendar $cal
+    if (-not $kind.IsWorkday) {
+        Write-Log "跳过 $day（$weekday）：$($kind.Reason)。要强制出题请加 -IgnoreCalendar。"
+        exit 0
+    }
+    Write-Log "日历判定：$($kind.Reason)"
+}
+
+# ---------- 3. 幂等检查 ----------
 $dailyDir = Join-Path $root 'daily'
 if (-not (Test-Path $dailyDir)) { New-Item -ItemType Directory -Path $dailyDir -Force | Out-Null }
 $target = Join-Path $dailyDir ('{0}.md' -f $day)
@@ -54,9 +81,9 @@ if ((Test-Path $target) -and -not $Force) {
     exit 0
 }
 
-# ---------- 3. 组装提示词 ----------
-$dayNo = @(Get-ChildItem -Path $dailyDir -Filter '*.md' -File | Where-Object { $_.BaseName -match '^\d{4}-\d{2}-\d{2}$' -and $_.BaseName -ne $day }).Count + 1
-$weekday = $dayDate.ToString('dddd', [System.Globalization.CultureInfo]::GetCultureInfo('zh-CN'))
+# ---------- 4. 组装提示词 ----------
+$dayNo = @(Get-ChildItem -Path $dailyDir -Filter '*.md' -File |
+           Where-Object { $_.BaseName -match '^\d{4}-\d{2}-\d{2}$' -and $_.BaseName -ne $day }).Count + 1
 
 $promptPath = Join-Path $PSScriptRoot 'prompt.md'
 if (-not (Test-Path $promptPath)) { Write-Log "找不到提示词文件：$promptPath"; exit 1 }
@@ -66,7 +93,7 @@ $prompt = $prompt.Replace('{{DATE}}', $day).Replace('{{WEEKDAY}}', $weekday).Rep
 # 压成单行，避免命令行参数里的换行在 shim 转发时出问题
 $prompt = ($prompt -replace '\s*\r?\n\s*', ' ').Trim()
 
-# ---------- 4. 找 dsh ----------
+# ---------- 5. 找 dsh ----------
 $dsh = $cfg.dshPath
 if (-not $dsh -or -not (Test-Path $dsh)) {
     $cmd = Get-Command dsh -ErrorAction SilentlyContinue
@@ -76,7 +103,7 @@ $profileName = if ($cfg.profile) { $cfg.profile } else { 'headless' }
 
 Write-Log "开始生成 $day（第 $dayNo 天，$weekday），profile=$profileName，dsh=$dsh"
 
-# ---------- 5. 调用 headless ----------
+# ---------- 6. 调用 headless ----------
 # 注意：dsh 会把日志/推理写到 stderr。PowerShell 5.1 下 `2>&1` 会把 stderr 包装成
 # ErrorRecord，配合 ErrorActionPreference='Stop' 会直接抛 NativeCommandError，
 # 因此这里把 stderr 重定向到临时文件，并在调用期间把 EAP 降为 Continue。
@@ -106,9 +133,15 @@ Add-Content -Path $logFile -Value '---------- dsh stderr (tail 40) ----------' -
 Add-Content -Path $logFile -Value (($errText -split "`r?`n" | Select-Object -Last 40) -join "`r`n") -Encoding UTF8
 Add-Content -Path $logFile -Value ('---------- exit code: {0} ----------' -f $code) -Encoding UTF8
 
-# ---------- 6. 结果校验 ----------
+# ---------- 7. 结果校验 ----------
 if (Test-Path $target) {
-    Write-Log "生成成功：$target"
+    $text   = Get-Content $target -Raw -Encoding UTF8
+    $qCount = ([regex]::Matches($text, '(?m)^##\s*题\s')).Count
+    if ($qCount -ge 4) {
+        Write-Log "生成成功：$target（识别到 $qCount 道题）"
+    } else {
+        Write-Log "生成成功但格式可疑：$target 只识别到 $qCount 道题（期望 4）。建议人工看一眼。"
+    }
     exit 0
 }
 
@@ -124,5 +157,6 @@ $fallback = @"
 - 日志：``$logFile``
 - 手动重跑：``powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\daily-generate.ps1" -Force``
 "@
-Set-Content -Path $target -Value $fallback -Encoding UTF8
+# 无 BOM 的 UTF-8（PowerShell 5.1 的 Set-Content -Encoding UTF8 会加 BOM）
+[System.IO.File]::WriteAllText($target, $fallback, [System.Text.UTF8Encoding]::new($false))
 exit 1
