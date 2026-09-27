@@ -1,18 +1,34 @@
 ﻿<#
-  test-pick.ps1 — 抽签引擎自检（AI-Lab）
+  test-pick.ps1 — 抽签引擎自检（AI-Lab v3：两题位 / 三档时间盒）
 
   跑法：
       powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-pick.ps1
+      退出码：0 = 全过，1 = 有失败
 
-  验的是什么（不是"看起来对"，是能断言的不变量）：
-    1. 抽签池完整性：id 唯一、载体引用不悬空、scope 合法
-    2. 确定性：同一日期 + 同一历史 → 结果逐字节一致
-    3. dot-source 安全：当库被引用时不得抽签、不得写历史
-    4. 结构正确性：形态属于正确的池、载体与形态兼容、约束 scope 合法
-    5. 正交性：A1/A2 不同领域；同一天四题载体与约束互不相同
-    6. 冷却期：领域 40 抽内不重复、载体 8 抽内不重复、形态按池冷却
-    7. 覆盖率：30 个工作日实际用掉多少领域 / 载体（这是"随机范围"的度量）
-    8. 历史读写：同一天重复写只留一条；存盘再读回一致
+  七类断言（每一类都要有真实的失败模式，不能是恒真的空转）：
+    1. 配比：1000 个连续日期上，日档位组合 快+主 57.9% / 微+主 24.8% / 微+快 17.4%（±2pp）
+       —— 组合概率是「引擎属性」不是「日历属性」，必须用大样本量：30 天窗口里最稀的
+       组合标准差 ≈7.9pp，±5pp 的带子在正常抽样噪声下就会翻红（Task 4 实测 30.0% 撞线）。
+       顺带验确定性与题位边际（不是 50/35/15，而是 41.3/37.6/21.1，见规格 §3.2）。
+    2. 题位互异：两题档位必然不同（1000 个日期 + 30 个工作日）
+    3. 兼容：形态来自本题位自己的池、形态 allowedTiers 覆盖抽到的档位、载体与形态兼容、
+       约束 scope=main 只落主修档、领域绑定符合 pools.slots
+    4. 容量：池子比冷却窗口大（键缺失一律 FAIL —— 「1 -gt $null」在 PS 里为 True，会假绿）
+    5. 覆盖：30 个工作日后 A 组 20 种形态全覆盖、B 组 ≥20、领域 ≥25
+    5b. 档位冷却零告警：30 个工作日内「档位冷却让步」恰好 0 次
+       —— 断言 4 的「池 3 > 冷却 1」恒真，抓不到「窗口过约束」（Task 4 踩过这个坑：
+       cooldown.tier = 2 时 500 天里 179 天无解）。5b 是唯一的真实守卫。
+    6. 反漂移：prompt.md 与 skill\SKILL.md 不得复述池子容量与档位分钟数
+       （两份提示词里的硬编码数字会和 pools.json 漂开，所以要扫）
+
+  两条实现约束（踩过才写下来的）：
+    · 模拟必须自己累积历史。state\history.json 现在是 v1（Task 9 才迁到 v2），
+      而且不累积的话每天看到的输入完全一样 —— 冷却一次也不生效，覆盖率与零告警
+      断言会整体变成空转（实测不累积时 A 组只覆盖 16/20）。所以模拟从空的 v2 历史
+      起步，每天抽完再追加。全程只在内存里，绝不写 state\history.json
+      （脚本头尾各取一次文件指纹当证据）。
+    · 档位组合与历史无关（pick.ps1 的档位段只会交换 A/B 落位，从不改组合），
+      所以 1000 日样本用空历史量纯引擎配比；历史相关的一切都落在 30 工作日模拟里。
 #>
 [CmdletBinding()]
 param()
@@ -22,266 +38,408 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 $toolsDir = $PSScriptRoot
 $root     = Split-Path -Parent $toolsDir
+$histPath = Join-Path $root 'state\history.json'
 
-. (Join-Path $toolsDir 'pick.ps1') -Library
-
-$script:Pass = 0
-$script:Fail = 0
-function Test-Case {
-    param([bool]$Condition, [string]$Name, [string]$Detail = '')
-    if ($Condition) {
-        $script:Pass++
-        Write-Host ('  [PASS] ' + $Name)
-    } else {
-        $script:Fail++
-        $suffix = if ($Detail) { '  ← ' + $Detail } else { '' }
-        Write-Host ('  [FAIL] ' + $Name + $suffix)
-    }
+# ---- 只读守卫（进任何抽签之前先取指纹）----
+# 这个测试只允许在内存里模拟。一旦哪天有人把写历史的路径接到测试上（或者 -Library 忘了
+# 短路），这里会红，而不是悄悄改掉用户的真实历史。
+$histBefore = '(文件不存在)'
+if (Test-Path -LiteralPath $histPath) {
+    $histBefore = (Get-FileHash -LiteralPath $histPath -Algorithm SHA256).Hash
 }
-function Write-Section { param([string]$Title) Write-Host ''; Write-Host ('== ' + $Title + ' ' + ('=' * [Math]::Max(0, 60 - $Title.Length))) }
 
-# ============ 1. 抽签池完整性 ============
-Write-Section '1. 抽签池完整性'
+# -Library：pick.ps1 只导出函数，不抽签、不写历史
+. (Join-Path $toolsDir 'pick.ps1') -Library
 
 $pools = Get-AiLabPools -Path (Join-Path $toolsDir 'pools.json')
 
-$domIds = @($pools.domains | ForEach-Object { $_.id })
-$carIds = @($pools.carriers | ForEach-Object { $_.id })
-$twistIds = @($pools.twists | ForEach-Object { $_.id })
-$allForms = @(@($pools.aForms.main) + @($pools.aForms.quick) + @($pools.bForms.main) + @($pools.bForms.quick))
-$formIds = @($allForms | ForEach-Object { $_.id })
-
-Test-Case ($pools.domains.Count -eq 60) '领域池 = 60 个' "实际 $($pools.domains.Count)"
-Test-Case (@($domIds | Sort-Object -Unique).Count -eq $domIds.Count) '领域 id 无重复'
-Test-Case (@($carIds | Sort-Object -Unique).Count -eq $carIds.Count) '载体 id 无重复'
-Test-Case (@($twistIds | Sort-Object -Unique).Count -eq $twistIds.Count) '约束 id 无重复'
-Test-Case (@($formIds | Sort-Object -Unique).Count -eq $formIds.Count) '形态 id 无重复' "共 $($formIds.Count) 个形态"
-
-$dangling = @()
-foreach ($f in $allForms) {
-    if (-not $f.carriers -or $f.carriers.Count -eq 0) { $dangling += "$($f.id) 没有配载体" }
-    foreach ($c in $f.carriers) { if ($carIds -notcontains $c) { $dangling += "$($f.id) → $c 不存在" } }
+$script:Pass = 0
+$script:Fail = 0
+function Assert-That {
+    # $cond 故意不加 [bool] 约束：PowerShell 绑定任何数组（哪怕 @()）都会抛转换错误，
+    # 配合 $ErrorActionPreference = 'Stop' 会直接中断脚本而不是打印 FAIL。
+    param([string]$desc, $cond, [string]$why = '')
+    if ([bool]$cond) {
+        $script:Pass++
+        Write-Host ('  OK   ' + $desc)
+    } else {
+        $script:Fail++
+        Write-Host ('  FAIL ' + $desc + ' —— ' + $why) -ForegroundColor Red
+    }
 }
-Test-Case ($dangling.Count -eq 0) '每个形态的载体引用都有效' ($dangling -join '; ')
+function Write-Section {
+    param([string]$title)
+    Write-Host ''
+    Write-Host ('== ' + $title + ' ' + ('=' * [Math]::Max(0, 56 - $title.Length)))
+}
+function Format-Brief {
+    # 失败详情只列前 3 条：30 天 × 2 题位的完整错误列表会把真正的信息淹掉
+    param($items)
+    $list = @($items)
+    if ($list.Count -eq 0) { return '' }
+    $head = (@($list | Select-Object -First 3)) -join '; '
+    if ($list.Count -gt 3) { return ("$head ……（共 $($list.Count) 条）") }
+    return $head
+}
 
-$badScope = @($pools.twists | Where-Object { $_.scope -ne 'main' -and $_.scope -ne 'any' })
-Test-Case ($badScope.Count -eq 0) '约束 scope 合法（main / any）'
+$tierIds    = @($pools.tiers | ForEach-Object { $_.id })
+$aForms     = @($pools.aForms)
+$bForms     = @($pools.bForms)
+$domainIds  = @($pools.domains | ForEach-Object { $_.id })
+$carrierIds = @($pools.carriers | ForEach-Object { $_.id })
+$twistIds   = @($pools.twists | ForEach-Object { $_.id })
+$emptyHist  = [pscustomobject]@{ version = 2; entries = @() }
 
-$noAnchor = @($pools.domains | Where-Object { -not $_.anchors -or $_.anchors.Count -lt 3 })
-Test-Case ($noAnchor.Count -eq 0) '每个领域至少 3 条锚点' (($noAnchor | ForEach-Object { $_.id }) -join ',')
+# ============================================================
+# 断言 1：日档位组合配比（1000 个连续日期，±2pp）
+# ============================================================
+Write-Section '断言 1：日档位组合配比（1000 个连续日期）'
 
-# --- 1b. 容量：池子必须比冷却窗口大得够多，否则会锁死 ---
-# 这条断言是踩坑换来的：轻约束池原本只有 8 个、窗口 6，加上当天 A1/B1 也可能占用，
-# 快练题就会抽空 -> 冷却被迫让步。池子小的时候，冷却窗口不是"越严越好"。
-Write-Section '1b. 容量（池子大小 vs 冷却窗口）'
+Assert-That '档位恰为 micro/quick/main（下面钉死的期望值以此为前提）' `
+    ($tierIds.Count -eq 3 -and 'micro' -in $tierIds -and 'quick' -in $tierIds -and 'main' -in $tierIds) `
+    ($tierIds -join ',')
 
-$anyTwists   = @($pools.twists | Where-Object { $_.scope -eq 'any' })
-$quickTwistOk = $anyTwists.Count -ge ([int]$pools.cooldown.twist + 4)
-Test-Case $quickTwistOk `
-    "轻约束池 $($anyTwists.Count) 个 ≥ 窗口 $($pools.cooldown.twist) + 4（一天最多 3 个题位占用 + 1 个余量）"
+$sampleDays  = 1000
+$sampleStart = [datetime]'2026-09-28'
+$pairCount   = @{}
+$slotCount   = @{ A = @{}; B = @{} }
+foreach ($s in 'A', 'B') { foreach ($t in $tierIds) { $slotCount[$s][$t] = 0 } }
+$sameTierSample = 0
+$badTierSample  = 0
 
-$mainTwistOk = $pools.twists.Count -ge ([int]$pools.cooldown.twist + 4)
-Test-Case $mainTwistOk "约束池总数 $($pools.twists.Count) ≥ 窗口 $($pools.cooldown.twist) + 4"
-
-$domOk = $pools.domains.Count -ge ([int]$pools.cooldown.domain + 3)
-Test-Case $domOk "领域池 $($pools.domains.Count) ≥ 窗口 $($pools.cooldown.domain) + 3（一天消耗 2 个 + 1 个余量）"
-
-$minCarriers = (@($allForms | ForEach-Object { $_.carriers.Count }) | Measure-Object -Minimum).Minimum
-Test-Case ($minCarriers -ge 3) "每个形态至少兼容 3 个载体" "最少的是 $minCarriers 个"
-
-# ============ 2. 确定性 ============
-Write-Section '2. 确定性（同日期同历史 → 同结果）'
-
-$emptyHist = [pscustomobject]@{ version = 1; entries = @() }
-$p1 = Get-DailyPick -Date '2026-10-15' -Pools $pools -History $emptyHist
-$p2 = Get-DailyPick -Date '2026-10-15' -Pools $pools -History $emptyHist
-$j1 = $p1.picks | ConvertTo-Json -Depth 6 -Compress
-$j2 = $p2.picks | ConvertTo-Json -Depth 6 -Compress
-Test-Case ($j1 -eq $j2) '同一日期抽两次结果完全一致'
-Test-Case (($p1.picks.A1 | ConvertTo-Json -Compress) -ne ((Get-DailyPick -Date '2026-10-16' -Pools $pools -History $emptyHist).picks.A1 | ConvertTo-Json -Compress)) '不同日期结果不同'
-
-# ============ 3. dot-source 安全 ============
-Write-Section '3. dot-source 安全'
-
-$probeHist = Join-Path $env:TEMP ('ai-lab-pick-probe-{0}.json' -f ([guid]::NewGuid().ToString('N').Substring(0, 8)))
-$probeScript = Join-Path $env:TEMP ('ai-lab-probe-{0}.ps1' -f ([guid]::NewGuid().ToString('N').Substring(0, 8)))
-@(
-    '$ErrorActionPreference = ''Stop'''
-    ('. "' + (Join-Path $toolsDir 'pick.ps1') + '" -Library')
-    ('$x = Get-AiLabPools -Path "' + (Join-Path $toolsDir 'pools.json') + '"')
-    ('$h = Get-AiLabHistory -Path "' + $probeHist + '"')
-    '$p = Get-DailyPick -Date ''2026-10-20'' -Pools $x -History $h'
-    'Write-Output $p.picks.A1.form'
-) | Set-Content -LiteralPath $probeScript -Encoding ASCII
-
-$probeOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $probeScript
-Test-Case ($probeOut -match '^A\d+$') 'dot-source 后函数可用且只回一个形态 id' ($probeOut -join '|')
-Test-Case (-not (Test-Path -LiteralPath $probeHist)) 'dot-source 不会写历史文件'
-Remove-Item -LiteralPath $probeScript -Force -ErrorAction SilentlyContinue
-
-# ============ 4~7. 30 个工作日模拟 ============
-Write-Section '4~7. 30 个工作日模拟'
-
-$dates = New-Object System.Collections.Generic.List[string]
-$d = [datetime]::ParseExact('2026-09-23', 'yyyy-MM-dd', $null)
-while ($dates.Count -lt 30) {
-    if ($d.DayOfWeek -ne [System.DayOfWeek]::Saturday -and $d.DayOfWeek -ne [System.DayOfWeek]::Sunday) {
-        $dates.Add($d.ToString('yyyy-MM-dd'))
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$d  = $sampleStart
+for ($i = 0; $i -lt $sampleDays; $i++) {
+    $ds = $d.ToString('yyyy-MM-dd')
+    # 这里用空历史：档位组合与历史无关（pick.ps1 的档位段只会交换 A/B 落位，从不改组合），
+    # 量到的就是纯引擎配比。历史相关的一切都在下面的 30 工作日模拟里。
+    $pk = Get-DailyPick -Date $ds -Pools $pools -History $emptyHist
+    $ta = [string]$pk.picks.A.tier
+    $tb = [string]$pk.picks.B.tier
+    if ($ta -eq $tb) { $sameTierSample++ }
+    if ($tierIds -contains $ta) { $slotCount['A'][$ta] = $slotCount['A'][$ta] + 1 } else { $badTierSample++ }
+    if ($tierIds -contains $tb) { $slotCount['B'][$tb] = $slotCount['B'][$tb] + 1 } else { $badTierSample++ }
+    if ($ta -ne $tb) {
+        # 组合 key 按固定档位顺序拼，不受 A/B 落位影响
+        $key = (@($tierIds | Where-Object { $_ -in @($ta, $tb) })) -join '+'
+        if (-not $pairCount.ContainsKey($key)) { $pairCount[$key] = 0 }
+        $pairCount[$key]++
     }
     $d = $d.AddDays(1)
 }
+$sw.Stop()
+Write-Host ("  INFO {0} 个连续日期（{1} 起）逐日实抽，耗时 {2:N1}s" -f $sampleDays, $sampleStart.ToString('yyyy-MM-dd'), $sw.Elapsed.TotalSeconds)
 
-# 注意：这里必须用普通数组，不能用 List[object]。
-# PowerShell 5.1 和 7 都有一个地雷：@() 作用在「空的 List[object]」上会抛
-# ArgumentException: Argument types do not match（List[string] / List[int] 正常）。
-$entries   = @()
-$rows      = @()
-$allWarn   = New-Object System.Collections.Generic.List[string]   # 真问题：硬冲突 / 大池子不该有的让步
-$allNotes  = New-Object System.Collections.Generic.List[string]   # 正常现象：兼容载体少的形态让步
+Assert-That '1000 天里两题的档位都落在 pools.tiers 里' ($badTierSample -eq 0) "越界 $badTierSample 次"
+Assert-That '1000 天里只出现 3 种档位组合（档位数没被动过）' ($pairCount.Keys.Count -eq 3) `
+    ('实际 ' + ((@($pairCount.Keys | Sort-Object)) -join ','))
 
-foreach ($day in $dates) {
-    $hist = [pscustomobject]@{ version = 1; entries = $entries }
-    $pick = Get-DailyPick -Date $day -Pools $pools -History $hist
+# 期望值钉死成规格 §3.2 的三个数字；±2pp 在 1000 天样本上等价于 ±20 天。
+$pairExpect = @(
+    [pscustomobject]@{ key = 'micro+quick'; pct = 17.4; days = 174 },
+    [pscustomobject]@{ key = 'micro+main';  pct = 24.8; days = 248 },
+    [pscustomobject]@{ key = 'quick+main';  pct = 57.9; days = 579 }
+)
+foreach ($e in $pairExpect) {
+    $n = 0
+    if ($pairCount.ContainsKey($e.key)) { $n = $pairCount[$e.key] }
+    $pct = 100.0 * $n / $sampleDays
+    Assert-That ("日组合 {0} 频率 {1:N1}%（±2pp）" -f $e.key, $e.pct) `
+        ([Math]::Abs($pct - $e.pct) -le 2) `
+        ("实际 {0:N2}%（{1}/{2} 天，期望 {3} 天）" -f $pct, $n, $sampleDays, $e.days)
+}
+# 实测值打进 INFO：断言绿了也要看得见「离容差边界还有多远」，否则没人知道这条带子有多紧
+Write-Host ("  INFO 实测日组合：{0}" -f ((@($pairExpect | ForEach-Object {
+    $n = 0
+    if ($pairCount.ContainsKey($_.key)) { $n = $pairCount[$_.key] }
+    "{0} {1:N2}%（{2} 天）" -f $_.key, (100.0 * $n / $sampleDays), $n
+})) -join ' ｜ '))
+
+# 单题边际**不是** 50/35/15：两题档位必须不同，边际被推出 主 41.3% / 快 37.6% / 微 21.1%。
+# 这一组抓的是另一种坏法：组合分布完全正确、但「交换硬币」坏了 —— 例如 A 永远拿低档、
+# B 永远拿高档。组合断言对这种坏完全免疫（组合本身没变），只有按题位看边际才看得见。
+$margExpect = [ordered]@{ micro = 21.1; quick = 37.6; main = 41.3 }
+# 查不到就取 0：档位被改名时上面那条前置断言会红，这里不能因为 KeyNotFound 直接把脚本打断
+# （断言脚本抛异常 = 看不到完整清单，比红更糟）
+$margCount = @{ A = @{}; B = @{} }
+foreach ($slot in 'A', 'B') {
+    foreach ($t in $margExpect.Keys) {
+        $margCount[$slot][$t] = 0
+        if ($slotCount[$slot].ContainsKey($t)) { $margCount[$slot][$t] = $slotCount[$slot][$t] }
+    }
+}
+foreach ($slot in 'A', 'B') {
+    foreach ($t in $margExpect.Keys) {
+        $n   = $margCount[$slot][$t]
+        $pct = 100.0 * $n / $sampleDays
+        Assert-That ("题位 {0} 的 {1} 边际 ≈ {2:N1}%（±2pp）" -f $slot, $t, $margExpect[$t]) `
+            ([Math]::Abs($pct - $margExpect[$t]) -le 2) `
+            ("实际 {0:N2}%（{1}/{2} 天）" -f $pct, $n, $sampleDays)
+    }
+}
+Write-Host ("  INFO 实测题位边际：A 微 {0:N1}% / 快 {1:N1}% / 主 {2:N1}% ｜ B 微 {3:N1}% / 快 {4:N1}% / 主 {5:N1}%" -f `
+    (100.0 * $margCount['A']['micro'] / $sampleDays), (100.0 * $margCount['A']['quick'] / $sampleDays), `
+    (100.0 * $margCount['A']['main'] / $sampleDays), (100.0 * $margCount['B']['micro'] / $sampleDays), `
+    (100.0 * $margCount['B']['quick'] / $sampleDays), (100.0 * $margCount['B']['main'] / $sampleDays))
+
+# 确定性：同一日期 + 同一历史必须逐字节复现（否则任何回归都无从谈起）
+$detA = Get-DailyPick -Date '2026-10-15' -Pools $pools -History $emptyHist
+$detB = Get-DailyPick -Date '2026-10-15' -Pools $pools -History $emptyHist
+$detC = Get-DailyPick -Date '2026-10-16' -Pools $pools -History $emptyHist
+Assert-That '同一日期 + 同一历史 → 抽签结果逐字节一致' `
+    (($detA.picks | ConvertTo-Json -Depth 6 -Compress) -eq ($detB.picks | ConvertTo-Json -Depth 6 -Compress))
+Assert-That '相邻日期（2026-10-15 vs 2026-10-16）结果不同' `
+    (($detA.picks | ConvertTo-Json -Depth 6 -Compress) -ne ($detC.picks | ConvertTo-Json -Depth 6 -Compress))
+
+# ============================================================
+# 公共模拟：30 个工作日，累积内存历史（断言 2 / 3 / 5 / 5b 共用）
+# ============================================================
+Write-Section '模拟：30 个工作日（累积内存历史，不碰 state\history.json）'
+
+# 30 个周一至周五，从 2026-09-28 起（只跳周末；节假日不影响这里要测的东西）
+$days = @()
+$d = [datetime]'2026-09-28'
+while ($days.Count -lt 30) {
+    if ($d.DayOfWeek -ne 'Saturday' -and $d.DayOfWeek -ne 'Sunday') { $days += $d.ToString('yyyy-MM-dd') }
+    $d = $d.AddDays(1)
+}
+
+$simHist  = [pscustomobject]@{ version = 2; entries = @() }
+$rows     = @()
+$allWarn  = New-Object System.Collections.Generic.List[string]
+$allNotes = New-Object System.Collections.Generic.List[string]
+foreach ($day in $days) {
+    $pick = Get-DailyPick -Date $day -Pools $pools -History $simHist
     foreach ($w in $pick.warnings)      { $allWarn.Add("$day $w") }
     foreach ($n in $pick.cooldownNotes) { $allNotes.Add("$day $n") }
-    $entries += [pscustomobject]@{ date = $day; picks = $pick.picks }
-    $rows    += [pscustomobject]@{ date = $day; picks = $pick.picks }
+    $rows += [pscustomobject]@{ date = $day; picks = $pick.picks }
+    $simHist.entries += [pscustomobject]@{ date = $day; picks = $pick.picks }
 }
 
-# --- 4. 结构正确性 ---
-$structErr = New-Object System.Collections.Generic.List[string]
-foreach ($r in $rows) {
-    foreach ($slot in @('A1', 'A2', 'B1', 'B2')) {
-        $p = $r.picks.$slot
-        $isA = $slot.StartsWith('A'); $isMain = ($slot -eq 'A1' -or $slot -eq 'B1')
-        $formPool = if ($isA) { if ($isMain) { @($pools.aForms.main) } else { @($pools.aForms.quick) } }
-                    else      { if ($isMain) { @($pools.bForms.main) } else { @($pools.bForms.quick) } }
-        $f = $formPool | Where-Object { $_.id -eq $p.form }
-        if (-not $f) { $structErr.Add("$($r.date)/$slot 形态 $($p.form) 不在正确池里"); continue }
-        if ($f.carriers -notcontains $p.carrier) { $structErr.Add("$($r.date)/$slot 载体 $($p.carrier) 与形态 $($p.form) 不兼容") }
-        $t = $pools.twists | Where-Object { $_.id -eq $p.twist }
-        if (-not $t) { $structErr.Add("$($r.date)/$slot 约束 $($p.twist) 不存在"); continue }
-        if ($t.scope -eq 'main' -and -not $isMain) { $structErr.Add("$($r.date)/$slot 快练题抽到了重约束 $($p.twist)") }
-        if ($isA -and -not $p.domain) { $structErr.Add("$($r.date)/$slot A 题没有领域") }
-        if (-not $isA -and $p.domain) { $structErr.Add("$($r.date)/$slot B 题不该有领域") }
+# 累积本身必须被验证：漏掉上面那行追加，模拟就退化成「30 次相同的输入」，
+# 冷却全不生效，覆盖率和零告警断言会一起变成空转（这正是 Task 4 踩过的坑）。
+Assert-That '模拟历史确实在累积（每天追加一条）' `
+    (@($simHist.entries).Count -eq $days.Count) `
+    "实际 $(@($simHist.entries).Count) 条 / 应有 $($days.Count) 条"
+$noPick = @($rows | Where-Object { -not $_.picks.A -or -not $_.picks.B })
+Assert-That '30 个工作日每天都有 A / B 两个题位的抽签结果' `
+    ($rows.Count -eq $days.Count -and $noPick.Count -eq 0) `
+    ("缺 {0} 天（共 {1} 天）" -f $noPick.Count, $rows.Count)
+Write-Host ("  INFO 30 天 = {0} 道题；冷却让步（正常现象，只记不告警）{1} 次" -f ($rows.Count * 2), $allNotes.Count)
+
+# 测试自身的触达范围：两个题位在 30 天里都必须真的抽到过三档。抽不到 micro 档，
+# 断言 3 的 allowedTiers 过滤（micro 时 A 组只剩 15 个）就根本没被走到 —— 那种绿是假绿。
+foreach ($slot in 'A', 'B') {
+    foreach ($t in $tierIds) {
+        $n = @($rows | Where-Object { $_.picks.$slot.tier -eq $t }).Count
+        Assert-That "30 天里题位 $slot 抽到过 $t 档（否则相关断言是空转）" ($n -ge 1) "实际 $n 天"
     }
 }
-Test-Case ($structErr.Count -eq 0) '形态/载体/约束/领域 全部结构正确' (($structErr | Select-Object -First 3) -join '; ')
 
-# --- 5. 正交性 ---
-$orthErr = New-Object System.Collections.Generic.List[string]
+# ============================================================
+# 断言 2：两题档位必然不同
+# ============================================================
+Write-Section '断言 2：两题档位必然不同（tierPairRule = distinct）'
+
+Assert-That '1000 个日期样本里没有一天两题同档' ($sameTierSample -eq 0) "实际 $sameTierSample 天"
+$simSameTier = @($rows | Where-Object { $_.picks.A.tier -eq $_.picks.B.tier })
+Assert-That '30 个工作日里没有一天两题同档' ($simSameTier.Count -eq 0) `
+    ((@($simSameTier | ForEach-Object { $_.date })) -join ',')
+
+# ============================================================
+# 断言 3：形态 / 载体 / 约束 / 领域 与档位相容
+# ============================================================
+Write-Section '断言 3：形态/载体/约束/领域 与档位相容（30 个工作日）'
+
+$errForm    = New-Object System.Collections.Generic.List[string]
+$errTier    = New-Object System.Collections.Generic.List[string]
+$errCarrier = New-Object System.Collections.Generic.List[string]
+$errTwist   = New-Object System.Collections.Generic.List[string]
+$errDomain  = New-Object System.Collections.Generic.List[string]
+
 foreach ($r in $rows) {
-    if ($r.picks.A1.domain -eq $r.picks.A2.domain) { $orthErr.Add("$($r.date) A1/A2 同领域") }
-    $cars = @('A1', 'A2', 'B1', 'B2') | ForEach-Object { $r.picks.$_.carrier }
-    if (@($cars | Sort-Object -Unique).Count -ne 4) { $orthErr.Add("$($r.date) 四题载体有重复") }
-    $tws = @('A1', 'A2', 'B1', 'B2') | ForEach-Object { $r.picks.$_.twist }
-    if (@($tws | Sort-Object -Unique).Count -ne 4) { $orthErr.Add("$($r.date) 四题约束有重复") }
-}
-Test-Case ($orthErr.Count -eq 0) 'A1/A2 不同领域；同日载体与约束互不相同' (($orthErr | Select-Object -First 3) -join '; ')
+    foreach ($slotDef in @($pools.slots)) {
+        $slot = [string]$slotDef.id
+        $p    = $r.picks.$slot
+        if (-not $p) { $errForm.Add("$($r.date)/$slot 没有抽签结果"); continue }
 
-# --- 6. 冷却期 ---
-function Get-MinGap {
-    param([string[]]$Sequence)
-    $last = @{}
-    $min = [int]::MaxValue
-    for ($i = 0; $i -lt $Sequence.Count; $i++) {
-        $v = $Sequence[$i]
-        if ($last.ContainsKey($v)) { $g = $i - $last[$v]; if ($g -lt $min) { $min = $g } }
-        $last[$v] = $i
+        # 形态必须来自本题位自己的池（A → aForms，B → bForms），且恰好命中一次
+        $pool = @($pools.($slotDef.pool))
+        $hit  = @($pool | Where-Object { $_.id -eq $p.form })
+        if ($hit.Count -ne 1) {
+            $errForm.Add("$($r.date)/$slot 形态 $($p.form) 在 $($slotDef.pool) 里命中 $($hit.Count) 次")
+            continue
+        }
+        $f = $hit[0]
+
+        # allowedTiers：没写 = 三档通用；写了 = 必须包含抽到的档（否则会出现
+        # 「15 分钟做 200 行可运行代码」这种压不进时间盒的组合）
+        if (($f.PSObject.Properties.Name -contains 'allowedTiers') -and ($p.tier -notin $f.allowedTiers)) {
+            $errTier.Add("$($r.date)/$slot 形态 $($f.id) 不兼容档位 $($p.tier)（allowedTiers = $($f.allowedTiers -join '/')）")
+        }
+        if ($f.carriers -notcontains $p.carrier) {
+            $errCarrier.Add("$($r.date)/$slot 载体 $($p.carrier) 与形态 $($f.id) 不兼容")
+        }
+        $tw = @($pools.twists | Where-Object { $_.id -eq $p.twist })
+        if ($tw.Count -ne 1) {
+            $errTwist.Add("$($r.date)/$slot 约束 $($p.twist) 不在 twists 里")
+        } elseif ($tw[0].scope -eq 'main' -and $p.tier -ne 'main') {
+            $errTwist.Add("$($r.date)/$slot 非主修档 $($p.tier) 抽到了 scope=main 的重约束 $($tw[0].id)")
+        }
+        if ($slotDef.picksDomain -eq $true) {
+            if (-not $p.domain) { $errDomain.Add("$($r.date)/$slot 该绑领域却没有") }
+            elseif (@($domainIds | Where-Object { $_ -eq $p.domain }).Count -ne 1) {
+                $errDomain.Add("$($r.date)/$slot 领域 $($p.domain) 不在 domains 里")
+            }
+        } elseif ($p.domain) {
+            $errDomain.Add("$($r.date)/$slot 不该绑领域却有 $($p.domain)")
+        }
     }
-    if ($min -eq [int]::MaxValue) { return [int]::MaxValue }
-    return $min
+}
+Assert-That '形态都来自本题位自己的池' ($errForm.Count -eq 0) (Format-Brief $errForm)
+Assert-That '形态的 allowedTiers 覆盖抽到的档位' ($errTier.Count -eq 0) (Format-Brief $errTier)
+Assert-That '载体与形态兼容' ($errCarrier.Count -eq 0) (Format-Brief $errCarrier)
+Assert-That '约束 scope 与档位相容（scope=main 只落主修档）' ($errTwist.Count -eq 0) (Format-Brief $errTwist)
+Assert-That '领域绑定符合 pools.slots（A 绑 / B 不绑）' ($errDomain.Count -eq 0) (Format-Brief $errDomain)
+
+# ============================================================
+# 断言 4：容量（池子 vs 冷却窗口）
+# ============================================================
+Write-Section '断言 4：容量（池子 vs 冷却窗口）'
+
+# 少键一律判 FAIL：「1 -gt $null」在 PS 里是 True，不显式挡掉就会出现「键被改名后断言反而变绿」
+$cd = $pools.cooldown
+$aFormCd = $null; if ($cd.PSObject.Properties.Name -contains 'aForm') { $aFormCd = [int]$cd.aForm }
+$bFormCd = $null; if ($cd.PSObject.Properties.Name -contains 'bForm') { $bFormCd = [int]$cd.bForm }
+$tierCd  = $null; if ($cd.PSObject.Properties.Name -contains 'tier')  { $tierCd  = [int]$cd.tier }
+$aFormCdTxt = '(缺键)'; if ($null -ne $aFormCd) { $aFormCdTxt = $aFormCd }
+$bFormCdTxt = '(缺键)'; if ($null -ne $bFormCd) { $bFormCdTxt = $bFormCd }
+$tierCdTxt  = '(缺键)'; if ($null -ne $tierCd)  { $tierCdTxt  = $tierCd }
+
+Assert-That 'aForm 池 > aForm 冷却窗口' ($null -ne $aFormCd -and $aForms.Count -gt $aFormCd) `
+    ("池 {0} vs 冷却 {1}" -f $aForms.Count, $aFormCdTxt)
+Assert-That 'bForm 池 > bForm 冷却窗口' ($null -ne $bFormCd -and $bForms.Count -gt $bFormCd) `
+    ("池 {0} vs 冷却 {1}" -f $bForms.Count, $bFormCdTxt)
+
+foreach ($t in @($pools.tiers)) {
+    $aN = @($aForms | Where-Object {
+        -not ($_.PSObject.Properties.Name -contains 'allowedTiers') -or ($t.id -in $_.allowedTiers)
+    }).Count
+    $bN = @($bForms | Where-Object {
+        -not ($_.PSObject.Properties.Name -contains 'allowedTiers') -or ($t.id -in $_.allowedTiers)
+    }).Count
+    Assert-That "档位 $($t.id) 的 A 组候选非空" ($aN -gt 0) "实际 $aN"
+    Assert-That "档位 $($t.id) 的 B 组候选非空" ($bN -gt 0) "实际 $bN"
+    Assert-That "档位 $($t.id) 的 A 组候选 > tier 冷却窗口" ($null -ne $tierCd -and $aN -gt $tierCd) `
+        ("候选 {0} vs 冷却 {1}" -f $aN, $tierCdTxt)
+    Assert-That "档位 $($t.id) 的 B 组候选 > tier 冷却窗口" ($null -ne $tierCd -and $bN -gt $tierCd) `
+        ("候选 {0} vs 冷却 {1}" -f $bN, $tierCdTxt)
+}
+# 说实话：「候选 15 > 冷却 1」这种断言永远是绿的，它只能抓「冷却 ≥ 候选数」这种极端配置。
+# 真正抓「档位窗口过约束」的是断言 5b（30 天里零告警）。
+Write-Host '  INFO 档位容量断言是弱守卫（3 > 1 恒真）；真正的守卫是断言 5b'
+
+# ============================================================
+# 断言 5：覆盖率（30 个工作日，累积历史）
+# ============================================================
+Write-Section '断言 5：覆盖率（30 个工作日，累积历史）'
+
+$seenA = @{}; $seenB = @{}; $seenDomain = @{}; $seenCarrier = @{}; $seenTwist = @{}
+foreach ($r in $rows) {
+    $pA = $r.picks.A; $pB = $r.picks.B
+    $seenA[[string]$pA.form]       = $true
+    $seenDomain[[string]$pA.domain] = $true
+    $seenCarrier[[string]$pA.carrier] = $true
+    $seenTwist[[string]$pA.twist]   = $true
+    $seenB[[string]$pB.form]       = $true
+}
+Write-Host ("  INFO 30 天覆盖：A 形态 {0}/{1}、B 形态 {2}/{3}、领域 {4}/{5}、A 载体 {6}/{7}、A 约束 {8}/{9}" -f `
+    $seenA.Keys.Count, $aForms.Count, $seenB.Keys.Count, $bForms.Count, `
+    $seenDomain.Keys.Count, $domainIds.Count, $seenCarrier.Keys.Count, $carrierIds.Count, `
+    $seenTwist.Keys.Count, $twistIds.Count)
+
+Assert-That "A 组 $($aForms.Count) 种形态全覆盖" ($seenA.Keys.Count -eq $aForms.Count) `
+    "实际 $($seenA.Keys.Count)/$($aForms.Count)"
+Assert-That "B 组覆盖 ≥ 20 种（池 $($bForms.Count)）" ($seenB.Keys.Count -ge 20) `
+    "实际 $($seenB.Keys.Count)/$($bForms.Count)"
+Assert-That "领域覆盖 ≥ 25 个（池 $($domainIds.Count)）" ($seenDomain.Keys.Count -ge 25) `
+    "实际 $($seenDomain.Keys.Count)/$($domainIds.Count)"
+
+# ============================================================
+# 断言 5b：档位冷却零告警（过约束的唯一真实守卫）
+# ============================================================
+Write-Section '断言 5b：档位冷却零告警（过约束的唯一真实守卫）'
+
+$tierWarn  = @($allWarn | Where-Object { $_ -match '档位冷却让步' })
+$otherWarn = @($allWarn | Where-Object { $_ -notmatch '档位冷却让步' })
+Assert-That '30 个工作日内「档位冷却让步」告警 0 次' ($tierWarn.Count -eq 0) `
+    ("实际 {0} 次：{1}" -f $tierWarn.Count, (Format-Brief $tierWarn))
+Assert-That '30 个工作日内没有其它抽签告警（硬冲突 / 形态 / 领域 / 约束让步）' ($otherWarn.Count -eq 0) `
+    ("实际 {0} 次：{1}" -f $otherWarn.Count, (Format-Brief $otherWarn))
+# 冷却交换之后落位也必须仍然不同档：交换逻辑写错（例如两个题位都拿到同一个档对象）
+# 只会在这里现形，纯组合断言看不见。
+$swapSame = @($rows | Where-Object { $_.picks.A.tier -eq $_.picks.B.tier })
+Assert-That '累积历史下（冷却交换后）两题档位仍然不同' ($swapSame.Count -eq 0) `
+    ((@($swapSame | ForEach-Object { $_.date })) -join ',')
+
+# ============================================================
+# 断言 6：反漂移 —— 提示词不得复述池子容量与档位分钟数
+# ============================================================
+Write-Section '断言 6：反漂移扫描（提示词 vs pools.json）'
+
+$guardFiles = @(
+    (Join-Path $toolsDir 'prompt.md'),
+    (Join-Path $root 'skill\SKILL.md')
+)
+# 只匹配「数字 + 池子/档位量词」的固定组合，不做泛化数字匹配（否则版本号、端口号全中）
+$guardPatterns = @(
+    '\d+\s*个\s*(领域|形态|载体|约束|题型)',
+    '\d+\s*种\s*(形态|领域|载体|约束)',
+    '\d+\s*[-–~]\s*\d+\s*分钟'
+)
+# 扫描器自检：每条模式都必须能命中「已知坏例」。正则被写坏（比如量词打错）时，
+# 扫描会变成永远绿的假守卫 —— 这是这份测试里最危险的一种绿。
+$guardSamples = @('池子一共 18 个领域，别搞错', 'A 组有 20 种形态', '时间盒 45–60 分钟')
+foreach ($pat in $guardPatterns) {
+    $hit = @($guardSamples | Where-Object { $_ -match $pat })
+    Assert-That ("反漂移模式「{0}」能命中已知坏例" -f $pat) ($hit.Count -ge 1) '没有坏例能命中它 = 死模式'
 }
 
-$domSeq = @(); foreach ($r in $rows) { $domSeq += $r.picks.A1.domain; $domSeq += $r.picks.A2.domain }
-$carSeq = @(); foreach ($r in $rows) { foreach ($s in @('A1', 'A2', 'B1', 'B2')) { $carSeq += $r.picks.$s.carrier } }
-$twSeq  = @(); foreach ($r in $rows) { foreach ($s in @('A1', 'A2', 'B1', 'B2')) { $twSeq += $r.picks.$s.twist } }
-
-$domGap = Get-MinGap -Sequence $domSeq
-$carGap = Get-MinGap -Sequence $carSeq
-$twGap  = Get-MinGap -Sequence $twSeq
-
-Test-Case ($domGap -ge [int]$pools.cooldown.domain) "领域冷却：最小间隔 $domGap ≥ $($pools.cooldown.domain) 抽"
-# 载体的冷却窗口会被「形态兼容性」自动收缩（只兼容 3 个载体的形态，窗口最多 2），
-# 所以全局最小间隔只能断言一个诚实的地板值：≥2 表示绝不出现相邻两题同载体。
-# 同日不重复是硬保证，由上面的正交性用例覆盖。
-Test-Case ($carGap -ge 2) "载体：最小间隔 $carGap ≥ 2 抽（同日不重复是硬保证）"
-Test-Case ($twGap -ge 4) "约束：最小间隔 $twGap ≥ 4 抽（绝不同日重复）"
-
-$formGapErr = New-Object System.Collections.Generic.List[string]
-foreach ($slot in @('A1', 'A2', 'B1', 'B2')) {
-    $isMain = ($slot -eq 'A1' -or $slot -eq 'B1')
-    $cfg = if ($slot -eq 'A1') { $pools.cooldown.aFormMain } elseif ($slot -eq 'A2') { $pools.cooldown.aFormQuick }
-           elseif ($slot -eq 'B1') { $pools.cooldown.bFormMain } else { $pools.cooldown.bFormQuick }
-    $poolSize = if ($slot -eq 'A1') { $pools.aForms.main.Count } elseif ($slot -eq 'A2') { $pools.aForms.quick.Count }
-                elseif ($slot -eq 'B1') { $pools.bForms.main.Count } else { $pools.bForms.quick.Count }
-    $eff = [Math]::Min([int]$cfg, $poolSize - 1)
-    $seq = @($rows | ForEach-Object { $_.picks.$slot.form })
-    $gap = Get-MinGap -Sequence $seq
-    if ($gap -lt $eff) { $formGapErr.Add("$slot 最小间隔 $gap < 有效冷却 $eff") }
+$scannedLines = 0
+foreach ($gf in $guardFiles) {
+    if (-not (Test-Path -LiteralPath $gf)) {
+        Assert-That ("$(Split-Path -Leaf $gf) 存在（缺文件 = 扫描空转）") $false "$gf 不存在"
+        continue
+    }
+    $lines = @(Get-Content -LiteralPath $gf -Encoding UTF8)
+    $scannedLines += $lines.Count
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        foreach ($pat in $guardPatterns) {
+            if ($lines[$i] -match $pat) {
+                Assert-That ("$(Split-Path -Leaf $gf):$($i + 1) 无硬编码池子容量/档位分钟数") $false `
+                    ('命中「' + $Matches[0] + '」')
+            }
+        }
+    }
 }
-Test-Case ($formGapErr.Count -eq 0) '形态冷却：每个题位按各自池的有效窗口轮换' ($formGapErr -join '; ')
+# 扫描必须真的读到内容：两份文件都不存在时上面只会报「不存在」，这条挡的是扫描彻底空转
+Assert-That '反漂移扫描读到了内容（不是空转）' ($scannedLines -gt 0) "共读 $scannedLines 行"
 
-Test-Case ($allWarn.Count -eq 0) '30 天模拟中无硬冲突、无大池子异常让步' (($allWarn | Select-Object -First 3) -join '; ')
+# ============================================================
+# 汇总
+# ============================================================
+Write-Section '汇总与只读守卫'
 
-# --- 7. 覆盖率 ---
-Write-Section '7. 覆盖率（随机范围的度量）'
-
-$domUsed  = @($domSeq | Sort-Object -Unique)
-$carUsed  = @($carSeq | Sort-Object -Unique)
-$twUsed   = @($twSeq  | Sort-Object -Unique)
-
-Write-Host ''
-Write-Host ('  30 个工作日 = ' + $rows.Count + ' 天 / ' + ($rows.Count * 4) + ' 道题')
-Write-Host ("  领域：用到 {0}/{1} 个（{2:P0}）" -f $domUsed.Count, $pools.domains.Count, ($domUsed.Count / $pools.domains.Count))
-Write-Host ("  载体：用到 {0}/{1} 个" -f $carUsed.Count, $pools.carriers.Count)
-Write-Host ("  约束：用到 {0}/{1} 个" -f $twUsed.Count, $pools.twists.Count)
-foreach ($slot in @('A1', 'A2', 'B1', 'B2')) {
-    $seq = @($rows | ForEach-Object { $_.picks.$slot.form })
-    $poolSize = if ($slot -eq 'A1') { $pools.aForms.main.Count } elseif ($slot -eq 'A2') { $pools.aForms.quick.Count }
-                elseif ($slot -eq 'B1') { $pools.bForms.main.Count } else { $pools.bForms.quick.Count }
-    Write-Host ("  {0} 形态：用到 {1}/{2} 个" -f $slot, @($seq | Sort-Object -Unique).Count, $poolSize)
+$histAfter = '(文件不存在)'
+if (Test-Path -LiteralPath $histPath) {
+    $histAfter = (Get-FileHash -LiteralPath $histPath -Algorithm SHA256).Hash
 }
-$combo = @($rows | ForEach-Object { '{0}+{1}+{2}' -f $_.picks.A1.domain, $_.picks.A1.form, $_.picks.A1.carrier } | Sort-Object -Unique)
-Write-Host ("  A1 三维组合：{0} 天里出现 {1} 种不同组合" -f $rows.Count, $combo.Count)
-Write-Host ("  载体软冷却让步：{0} 次 / {1} 个题位（形态兼容载体只有 3 个时属正常）" -f $allNotes.Count, ($rows.Count * 4))
-Write-Host ''
+Assert-That 'state\history.json 未被本次测试改写（模拟只在内存里）' ($histAfter -eq $histBefore) `
+    "测试前 $histBefore / 测试后 $histAfter"
 
-Test-Case ($domUsed.Count -ge 58) '30 天覆盖 ≥58 个领域' "实际 $($domUsed.Count)"
-Test-Case ($carUsed.Count -eq $pools.carriers.Count) ("30 天覆盖全部 {0} 个载体" -f $pools.carriers.Count) "实际 $($carUsed.Count)"
-Test-Case ($twUsed.Count -eq $pools.twists.Count) ("30 天覆盖全部 {0} 个约束" -f $pools.twists.Count) "实际 $($twUsed.Count)"
-Test-Case ($combo.Count -eq $rows.Count) 'A1 的领域+形态+载体组合 30 天不重样' "实际 $($combo.Count)"
-
-# ============ 8. 历史读写 ============
-Write-Section '8. 历史读写'
-
-$tmpHist = Join-Path $env:TEMP ('ai-lab-hist-{0}.json' -f ([guid]::NewGuid().ToString('N').Substring(0, 8)))
-try {
-    $sample = (Get-DailyPick -Date '2026-11-02' -Pools $pools -History $emptyHist).picks
-    $n1 = Add-AiLabPick -HistoryPath $tmpHist -Date '2026-11-02' -Pick $sample
-    $n2 = Add-AiLabPick -HistoryPath $tmpHist -Date '2026-11-02' -Pick $sample
-    Test-Case ($n1 -eq 1 -and $n2 -eq 1) '同一天重复写历史只保留一条' "第一次 $n1 条，第二次 $n2 条"
-
-    Add-AiLabPick -HistoryPath $tmpHist -Date '2026-11-03' -Pick $sample | Out-Null
-    $back = Get-AiLabHistory -Path $tmpHist
-    Test-Case ($back.entries.Count -eq 2) '写入两天后能读回两条' "实际 $($back.entries.Count)"
-
-    # 必须查原始字节：File.ReadAllText(path, Encoding.UTF8) 会自动识别并剥掉 BOM，
-    # 用它判断「有没有 BOM」永远是错的（这坑我踩过一次）。
-    $bytes = [System.IO.File]::ReadAllBytes($tmpHist)
-    $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
-    Test-Case (-not $hasBom) '历史 JSON 无 BOM（其它语言也能解析）' "前 3 字节 $($bytes[0..2] -join ',')"
-
-    $roundTrip = ($back.entries[0].picks | ConvertTo-Json -Depth 6 -Compress) -eq ($sample | ConvertTo-Json -Depth 6 -Compress)
-    Test-Case $roundTrip '存盘再读回内容一致'
-} finally {
-    Remove-Item -LiteralPath $tmpHist -Force -ErrorAction SilentlyContinue
-}
-
-# ============ 汇总 ============
 Write-Host ''
 Write-Host ('=' * 64)
-Write-Host ("结果：{0} 通过 / {1} 失败" -f $script:Pass, $script:Fail)
+$code = 1; if ($script:Fail -eq 0) { $code = 0 }
+Write-Host ("结果：{0} 通过 / {1} 失败（退出码 {2}）" -f $script:Pass, $script:Fail, $code)
 Write-Host ('=' * 64)
-if ($script:Fail -gt 0) { exit 1 }
-exit 0
+exit $code
