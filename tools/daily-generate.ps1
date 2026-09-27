@@ -1,7 +1,7 @@
 ﻿<#
-  daily-generate.ps1 — 生成当天的四道任务（AI-Lab 每日四题）
+  daily-generate.ps1 — 生成当天的两道任务（AI-Lab 每日两题：题位 A 广度 + 题位 B 框架）
 
-  调用方：Windows 计划任务 AI-Lab-Daily-FourTasks（周一至周五 07:30）
+  调用方：Windows 计划任务（名称见 config.json → taskName；周一至周五 07:30）
   手动用法：
       powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\daily-generate.ps1
       powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\daily-generate.ps1 -Force
@@ -122,18 +122,89 @@ try {
     exit 1
 }
 
-foreach ($s in @('A1', 'A2', 'B1', 'B2')) {
+# ---------- 4c. 档位 → 深度（规格 §4.2.1）----------
+# 档位不换形态，只缩放产出深度。提示条数进模板占位符 __HINTS_A__ / __HINTS_B__；
+# 验收条数没有占位符，写进 prompt.md 让模型落笔（那边同表）。
+# 两个表都不认识的档位 id 必须当场报错：查不到会长成「最多  条」这种空值，不会自己现形。
+$hintMap = @{ micro = 1; quick = 2; main = 3 }
+$critMap = @{ micro = 2; quick = 3; main = 4 }
+
+# 题位名来自 pools.slots：v3 只有 A / B 两个题位（旧版是 A1/A2/B1/B2）。
+# 这里若还按旧名遍历，$pick.picks.A1 是 $null，四个字段会全部打印成空（踩过一次，静默）。
+foreach ($s in @('A', 'B')) {
     $p = $pick.picks.$s
-    Write-Log ("  抽签 {0}: 领域={1} 形态={2} 载体={3} 约束={4}" -f $s, $p.domain, $p.form, $p.carrier, $p.twist)
+    $tierId = [string]$p.tier
+    if (-not $hintMap.ContainsKey($tierId) -or -not $critMap.ContainsKey($tierId)) {
+        Write-Log "抽签失败：档位 id「$tierId」（题位 $s）不在深度映射表里（pools.tiers 改名了？）"
+        exit 1
+    }
+    $domainText = if ($p.domain) { $p.domain } else { '（不绑领域）' }
+    Write-Log ("  抽签 {0}: 档位={1} 领域={2} 形态={3} 载体={4} 约束={5} 提示≤{6} 验收{7}条" -f `
+               $s, $tierId, $domainText, $p.form, $p.carrier, $p.twist, $hintMap[$tierId], $critMap[$tierId])
 }
 if ($pick.warnings.Count -gt 0) { Write-Log ("  抽签告警：" + ($pick.warnings -join '；')) }
 
+# ---------- 4d. 解析模板：把 __TIER_A__ 这类占位符换成今天的真实值 ----------
+# 为什么在脚本里解析，而不是留给模型填：模型要填就得先读模板、再读抽签结果、再做一遍映射，
+# 三处都能出错，而且错了不会报错——产物里会留一个 __MINUTES_A__ 或一行「最多  条」。
+# 这里解析成一份成品模板塞进提示词，模型只管写内容，不管写值。
+$templatePath = Join-Path $root 'templates\daily-task.md'
+if (-not (Test-Path $templatePath)) { Write-Log "找不到模板文件：$templatePath"; exit 1 }
+
+$tierById   = @{}; foreach ($t in $pools.tiers)                        { $tierById[$t.id]   = $t }
+$formById   = @{}; foreach ($f in @($pools.aForms) + @($pools.bForms)) { $formById[$f.id]   = $f }
+$domainById = @{}; foreach ($d in $pools.domains)                      { $domainById[$d.id] = $d }
+
+$resolved = Get-Content $templatePath -Raw -Encoding UTF8
+$tierOf   = @{}
+foreach ($s in @('A', 'B')) {
+    $p = $pick.picks.$s
+    if (-not $p) { Write-Log "模板解析失败：抽签结果里没有题位 $s"; exit 1 }
+    $t = $tierById[[string]$p.tier]
+    $f = $formById[[string]$p.form]
+    # 查不到就当场炸：静默渲染成空值是最难发现的一种错（pick.ps1 的渲染同款处理）
+    if (-not $t) { Write-Log "模板解析失败：题位 $s 的档位 id 查不到：$($p.tier)"; exit 1 }
+    if (-not $f) { Write-Log "模板解析失败：题位 $s 的形态 id 查不到：$($p.form)"; exit 1 }
+    if (-not $hintMap.ContainsKey([string]$p.tier)) { Write-Log "模板解析失败：档位 id「$($p.tier)」没有提示条数映射"; exit 1 }
+    $tierOf[$s] = $t
+    $resolved = $resolved.Replace("__TIER_${s}__",    $t.name)
+    $resolved = $resolved.Replace("__FORM_${s}__",    ('{0} {1}' -f $f.id, $f.name))
+    $resolved = $resolved.Replace("__MINUTES_${s}__", ('{0}–{1} 分钟' -f $t.minutes[0], $t.minutes[1]))
+    $resolved = $resolved.Replace("__HINTS_${s}__",   [string]$hintMap[[string]$p.tier])
+}
+
+# 全天时间盒 = 两题时间盒之和（两题按 A → B 顺序做）；档位组合按权重从重到轻写，
+# 与哪一题抽到哪一档无关（规格 §4.3 的示例形状：主修 + 快练）。
+$dayFloor   = [int]$tierOf['A'].minutes[0] + [int]$tierOf['B'].minutes[0]
+$dayCeiling = [int]$tierOf['A'].minutes[1] + [int]$tierOf['B'].minutes[1]
+$ordered    = @($tierOf['A'], $tierOf['B']) |
+              Sort-Object -Property @{ Expression = { [double]$_.weight } }, @{ Expression = { [string]$_.id } } -Descending
+$summary    = '档位组合：{0} ｜ 全天时间盒：{1}–{2} 分钟' -f `
+              (($ordered | ForEach-Object { $_.name }) -join ' + '), $dayFloor, $dayCeiling
+$resolved = $resolved.Replace('{{ASSIGNMENT_SUMMARY}}', $summary)
+$resolved = $resolved.Replace('{{DATE}}', $day).Replace('{{WEEKDAY}}', $weekday).Replace('{{N}}', [string]$dayNo).Replace('{{ROOT}}', $root)
+
+# 占位符必须全部换掉：漏一个就会原样出现在产物里（模型会照抄），而且是静默的
+if ($resolved -match '(__[A-Za-z_]+__|\{\{[A-Za-z_]+\}\})') {
+    Write-Log ("模板解析失败：占位符没有全部替换 → $($Matches[0])（核对 templates\daily-task.md 与 daily-generate.ps1 的替换表）")
+    exit 1
+}
+
 $prompt = Get-Content $promptPath -Raw -Encoding UTF8
+if ($prompt -notmatch '\{\{TEMPLATE\}\}') {
+    # 注入点没了 = 模型只看到 {{ASSIGNMENT}}，输不出来今天的时间盒与提示条数
+    Write-Log '警告：prompt.md 里没有 {{TEMPLATE}} 注入点，成品模板没有交给模型。'
+}
+$prompt = $prompt.Replace('{{TEMPLATE}}', $resolved)
 $prompt = $prompt.Replace('{{ASSIGNMENT}}', $assignment)
 $prompt = $prompt.Replace('{{DATE}}', $day).Replace('{{WEEKDAY}}', $weekday).Replace('{{N}}', [string]$dayNo)
 # {{ROOT}} → 真实仓库路径。prompt.md 与 templates\daily-task.md 都用它作占位符，
 # 好处是仓库里不出现任何机器绝对路径（换台机器克隆下来照样能用）。
 $prompt = $prompt.Replace('{{ROOT}}', $root)
+# 提示词里漏掉的花括号占位符会原样进模型上下文，那是最难发现的一种漂移
+if ($prompt -match '\{\{[A-Za-z_]+\}\}') {
+    Write-Log ("警告：提示词里还有没替换的占位符 → $($Matches[0])（检查 prompt.md 与替换表）")
+}
 # 压成单行，避免命令行参数里的换行在 shim 转发时出问题
 $prompt = ($prompt -replace '\s*\r?\n\s*', ' ').Trim()
 
@@ -191,26 +262,41 @@ if (Test-Path $target) {
     $qCount = ([regex]::Matches($text, '(?m)^##\s*题\s')).Count
 
     # 光看"文件存在"不够：模型可能遵循了"已存在就不要覆盖"而空转，文件其实没动。
-    # 所以要检查写入时间，并核对抽到的领域有没有真的落到文件里。
+    # 所以要检查写入时间，并核对抽到的领域 / 形态有没有真的落到文件里。
     $written = (Get-Item -LiteralPath $target).LastWriteTime
     if ($written -lt $runStart) {
         Write-Log "警告：$target 没有被更新（写入时间 $written 早于本次运行）。模型很可能空转了，建议重跑或人工出题。"
     }
+    # 自检：抽签结果必须真的落到文件里。
+    # 旧版遍历 @('A1','A2') 读 $pick.picks.A1 —— 那个值是 $null，于是
+    # `if (-not $p.domain) { continue }` 会跳过每一个槽位，这条自检永远不会失败
+    # （一个被悄悄摘掉的安全网：错了也报成功）。
+    # 改按 pools.slots 的题位名遍历，判据对两个题位都可检验：
+    # 题位 A 要求领域与形态都非空，题位 B 不绑领域、只要求形态非空。
+    $axisLabel = @{ domain = '领域'; form = '形态' }
     $missing = @()
-    foreach ($s in @('A1', 'A2')) {
+    foreach ($s in @('A', 'B')) {
         $p = $pick.picks.$s
-        if (-not $p.domain) { continue }
-        $dName = ($pools.domains | Where-Object { $_.id -eq $p.domain }).name
-        if ($dName -and $text -notmatch [regex]::Escape($dName)) { $missing += "$s 的领域「$dName」" }
+        if (-not $p) { $missing += "题位 $s 的抽签结果整个缺失"; continue }
+        $axes = @('form')
+        if ($s -eq 'A') { $axes = @('domain', 'form') }
+        foreach ($axis in $axes) {
+            $id = [string]$p.$axis
+            if (-not $id) { $missing += ('题位 {0} 的{1}为空' -f $s, $axisLabel[$axis]); continue }
+            $item = if ($axis -eq 'domain') { $domainById[$id] } else { $formById[$id] }
+            if (-not $item) { $missing += ('题位 {0} 的{1} id「{2}」在 pools.json 里查不到' -f $s, $axisLabel[$axis], $id); continue }
+            if ($text -notmatch [regex]::Escape([string]$item.name)) { $missing += ('题位 {0} 的{1}「{2}」' -f $s, $axisLabel[$axis], $item.name) }
+        }
     }
     if ($missing.Count -gt 0) {
-        Write-Log ("警告：抽签结果没落到文件里 → " + ($missing -join '；') + "。模型可能擅自换了领域。")
+        # 报在日志里、跟 qCount 一样是软判定：产物已经落盘，不该把整次运行判死
+        Write-Log ("自检失败：抽签结果没落到文件里 → " + ($missing -join '；') + "。模型可能擅自换了领域/形态，或者那几行根本没写。")
     }
 
-    if ($qCount -ge 4) {
+    if ($qCount -ge 2) {
         Write-Log "生成成功：$target（识别到 $qCount 道题）"
     } else {
-        Write-Log "生成成功但格式可疑：$target 只识别到 $qCount 道题（期望 4）。建议人工看一眼。"
+        Write-Log "生成成功但格式可疑：$target 只识别到 $qCount 道题（期望 2）。建议人工看一眼。"
     }
     if ($backup -and (Test-Path $backup)) { Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue }
     exit 0
