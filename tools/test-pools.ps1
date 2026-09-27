@@ -105,7 +105,7 @@ $cd = $pools.cooldown
 foreach ($k in 'domain', 'aForm', 'bForm', 'carrier', 'twist', 'tier') {
     Assert-That "cooldown 有键 $k" (Field $cd $k)
 }
-$cdExpect = [ordered]@{ domain = 56; aForm = 17; bForm = 20; carrier = 8; twist = 6; tier = 2 }
+$cdExpect = [ordered]@{ domain = 56; aForm = 17; bForm = 20; carrier = 8; twist = 6; tier = 1 }
 foreach ($k in $cdExpect.Keys) {
     $actual = if (Field $cd $k) { $cd.$k } else { '(缺键)' }
     Assert-That "cooldown.$k 恰为 $($cdExpect[$k])" ($actual -eq $cdExpect[$k]) "实际 $actual"
