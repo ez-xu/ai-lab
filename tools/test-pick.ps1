@@ -14,10 +14,15 @@
     3. 兼容：形态来自本题位自己的池、形态 allowedTiers 覆盖抽到的档位、载体与形态兼容、
        约束 scope=main 只落主修档、领域绑定符合 pools.slots
     4. 容量：池子比冷却窗口大（键缺失一律 FAIL —— 「1 -gt $null」在 PS 里为 True，会假绿）
+       其中 aForm/bForm 两条量的是「池子 vs 同轴冷却窗口」；另六条（档位 × 题位 × A/B）
+       量的是**形态轴**：该档位下的形态候选**个数** vs cooldown.tier 的**数值**。
+       两把尺子不同轴，所以它们**不是**档位窗口守卫 —— 实测最紧一条是「候选 10 > 1」，
+       要 cooldown.tier ≥ 10 才可能红（早已远超三档空间的合理取值）。它们还能抓的是
+       cooldown.tier 键被删/改名（$tierCd 变 $null → FAIL）。
     5. 覆盖：30 个工作日后 A 组 20 种形态全覆盖、B 组 ≥20、领域 ≥25
     5b. 档位冷却零告警：30 个工作日内「档位冷却让步」恰好 0 次
-       —— 断言 4 的「池 3 > 冷却 1」恒真，抓不到「窗口过约束」（Task 4 踩过这个坑：
-       cooldown.tier = 2 时 500 天里 179 天无解）。5b 是唯一的真实守卫。
+       —— 断言 4 的「候选 10 > 冷却 1」恒真，抓不到「窗口过约束」（Task 4 踩过这个坑：
+       cooldown.tier = 2 时抽签状态大量无解，评审：216 种组合里 108 种）。5b 是唯一的真实守卫。
     6. 反漂移：prompt.md 与 skill\SKILL.md 不得复述池子容量与档位分钟数
        （两份提示词里的硬编码数字会和 pools.json 漂开，所以要扫）
 
@@ -135,6 +140,17 @@ Assert-That '1000 天里只出现 3 种档位组合（档位数没被动过）' 
     ('实际 ' + ((@($pairCount.Keys | Sort-Object)) -join ','))
 
 # 期望值钉死成规格 §3.2 的三个数字；±2pp 在 1000 天样本上等价于 ±20 天。
+#
+# ⚠ 这三条带子是**黄金值锁**（golden lock），不是统计容忍带，**故意保持 ±2pp**：
+#   · 样本是固定的确定性日期序列（$sampleStart 起 $sampleDays 个连续日期），抽签只吃
+#     「日期字符串 → Get-AiLabRoll 的 SHA256」，所以「主+快 55.90%」是这串日期的
+#     **常量**，不是会抖动的抽样：解析均值 57.851%，实测 −1.95pp，n=1000 的标准误
+#     1.56pp → 1.28σ，属正常实现，期望值本身没写错。
+#   · 放宽会赔掉这条断言的用途：它要抓的是「先后抽两次档位」那种回归（会把 主+快
+#     推 +4.0pp、快+微 推 −3.1pp），带子放宽到 ±2.5pp 以上就分辨不出来了。
+#   · **重新基线化**：只要样本窗口起点（$sampleStart）或 Get-AiLabRoll 的哈希输入
+#     （"{0}|tierpair" / "{0}|tierswap"）有一处变动，实测值就会整体平移 ——
+#     那时必须重新量一遍并改写下面的期望值，否则**正确的引擎**也会红。
 $pairExpect = @(
     [pscustomobject]@{ key = 'micro+quick'; pct = 17.4; days = 174 },
     [pscustomobject]@{ key = 'micro+main';  pct = 24.8; days = 248 },
@@ -156,6 +172,7 @@ Write-Host ("  INFO 实测日组合：{0}" -f ((@($pairExpect | ForEach-Object {
 })) -join ' ｜ '))
 
 # 单题边际**不是** 50/35/15：两题档位必须不同，边际被推出 主 41.3% / 快 37.6% / 微 21.1%。
+# 期望值同样是黄金值锁（口径见上面 ±2pp 的说明）：样本窗口或哈希输入一改就要重新基线化。
 # 这一组抓的是另一种坏法：组合分布完全正确、但「交换硬币」坏了 —— 例如 A 永远拿低档、
 # B 永远拿高档。组合断言对这种坏完全免疫（组合本身没变），只有按题位看边际才看得见。
 $margExpect = [ordered]@{ micro = 21.1; quick = 37.6; main = 41.3 }
@@ -321,6 +338,7 @@ Assert-That 'aForm 池 > aForm 冷却窗口' ($null -ne $aFormCd -and $aForms.Co
 Assert-That 'bForm 池 > bForm 冷却窗口' ($null -ne $bFormCd -and $bForms.Count -gt $bFormCd) `
     ("池 {0} vs 冷却 {1}" -f $bForms.Count, $bFormCdTxt)
 
+$tierCapTight = $null   # 最紧的一条「候选数 vs 冷却数值」，只用来把下面的 INFO 说实
 foreach ($t in @($pools.tiers)) {
     $aN = @($aForms | Where-Object {
         -not ($_.PSObject.Properties.Name -contains 'allowedTiers') -or ($t.id -in $_.allowedTiers)
@@ -330,14 +348,27 @@ foreach ($t in @($pools.tiers)) {
     }).Count
     Assert-That "档位 $($t.id) 的 A 组候选非空" ($aN -gt 0) "实际 $aN"
     Assert-That "档位 $($t.id) 的 B 组候选非空" ($bN -gt 0) "实际 $bN"
-    Assert-That "档位 $($t.id) 的 A 组候选 > tier 冷却窗口" ($null -ne $tierCd -and $aN -gt $tierCd) `
-        ("候选 {0} vs 冷却 {1}" -f $aN, $tierCdTxt)
-    Assert-That "档位 $($t.id) 的 B 组候选 > tier 冷却窗口" ($null -ne $tierCd -and $bN -gt $tierCd) `
-        ("候选 {0} vs 冷却 {1}" -f $bN, $tierCdTxt)
+    # 下面两条**不是**档位窗口守卫：左边是形态轴上的候选**个数**，右边是 cooldown.tier 的
+    # **数值**，两把尺子不同轴。它们真正断言的只有一句：本档位下的形态候选数（非空且）
+    # 大于冷却窗口的数值。留着有用 —— cooldown.tier 键被删/改名时 $tierCd = $null，这两条会红。
+    Assert-That "档位 $($t.id) 的 A 组形态候选数 > 冷却窗口数值（形态轴，不是档位窗口守卫）" `
+        ($null -ne $tierCd -and $aN -gt $tierCd) ("候选 {0} vs 冷却数值 {1}" -f $aN, $tierCdTxt)
+    Assert-That "档位 $($t.id) 的 B 组形态候选数 > 冷却窗口数值（形态轴，不是档位窗口守卫）" `
+        ($null -ne $tierCd -and $bN -gt $tierCd) ("候选 {0} vs 冷却数值 {1}" -f $bN, $tierCdTxt)
+    foreach ($cap in @([pscustomobject]@{ slot = 'A'; n = $aN }, [pscustomobject]@{ slot = 'B'; n = $bN })) {
+        if ($null -eq $tierCapTight -or $cap.n -lt $tierCapTight.n) {
+            $tierCapTight = [pscustomobject]@{ slot = $cap.slot; tier = $t.id; n = $cap.n }
+        }
+    }
 }
-# 说实话：「候选 15 > 冷却 1」这种断言永远是绿的，它只能抓「冷却 ≥ 候选数」这种极端配置。
-# 真正抓「档位窗口过约束」的是断言 5b（30 天里零告警）。
-Write-Host '  INFO 档位容量断言是弱守卫（3 > 1 恒真）；真正的守卫是断言 5b'
+# 说实话：这六条量的是**形态轴**，实测最紧的一条是「B 组 micro 候选 10 > 冷却 1」——
+# 只有 cooldown.tier ≥ 10 时它们才可能红，那早已远超三档空间的合理取值。
+# 它们还能抓的是 cooldown.tier 键被删/改名；真正抓「档位窗口过约束」的是断言 5b（30 天零告警）。
+if ($tierCapTight) {
+    Write-Host ("  INFO 档位容量断言走形态轴：最紧一条「{0} 组 {1} 候选 {2} > 冷却数值 {3}」，只在 cooldown.tier ≥ {2} 时才可能红；" -f `
+        $tierCapTight.slot, $tierCapTight.tier, $tierCapTight.n, $tierCdTxt)
+    Write-Host '       它不是档位窗口守卫（只能抓冷却 ≥ 候选数 这种极端配置与键缺失）；过约束由断言 5b 守。'
+}
 
 # ============================================================
 # 断言 5：覆盖率（30 个工作日，累积历史）
@@ -391,28 +422,66 @@ $guardFiles = @(
     (Join-Path $toolsDir 'prompt.md'),
     (Join-Path $root 'skill\SKILL.md')
 )
-# 只匹配「数字 + 池子/档位量词」的固定组合，不做泛化数字匹配（否则版本号、端口号全中）
+# 只匹配「数字 + 池子/档位量词」的固定组合，不做泛化数字匹配（否则版本号、端口号全中）。
+# 量词表必须含 档位/题位/题：否则「3 个档位」这类复述会整句漏过去。
+# **故意不加**裸的 '\d+\s*分钟'：templates\daily-task.md:141 的「卡住 20 分钟以上」是合规的
+# 助教用法（Task 7 之后 skill\SKILL.md 里也可能出现同类句子），裸模式会误报。
+# 要守的漂移形状是「硬编码的档位分钟**区间**」，第三条正是这个形状。
 $guardPatterns = @(
-    '\d+\s*个\s*(领域|形态|载体|约束|题型)',
-    '\d+\s*种\s*(形态|领域|载体|约束)',
+    '\d+\s*个\s*(领域|形态|载体|约束|题型|档位|题位|题)',
+    '\d+\s*种\s*(形态|领域|载体|约束|档位|题位|题)',
     '\d+\s*[-–~]\s*\d+\s*分钟'
 )
+# 哨兵：每份被扫文件必须含有的一段中文。它堵的是**解码漂移**这条静默变绿的路径 ——
+# 坏例自检的样本住在（带 BOM 的）本 .ps1 里，被扫文件一旦解码漂了（Get-Content 少了
+# -Encoding UTF8，或 prompt.md 被别的编辑器存成 GBK），中文会成乱码、三条正则一条都
+# 匹配不上，扫描会安静地全绿（而且是真的更绿：连本该红的那条也会消失）。
+# 选词原则：必须是 Tasks 6/7 明确要**保留**的措辞。
+#   · prompt.md：Task 6 的保留清单第一条是「路径约定」。
+#     （**不能**用首行的「AI-Lab 每日四题」：Task 6 正是要把它改成「两题」。）
+#   · skill\SKILL.md：Task 7 钉死的 H1「AI-Lab 每日两题 · 出题与复盘教练」。
+#     该文件现在还不存在，所以哨兵断言只在它存在时才跑（缺文件的 FAIL 已单独覆盖）。
+$guardSentinels = @{
+    (Join-Path $toolsDir 'prompt.md')  = '路径约定'
+    (Join-Path $root 'skill\SKILL.md') = '出题与复盘教练'
+}
 # 扫描器自检：每条模式都必须能命中「已知坏例」。正则被写坏（比如量词打错）时，
 # 扫描会变成永远绿的假守卫 —— 这是这份测试里最危险的一种绿。
-$guardSamples = @('池子一共 18 个领域，别搞错', 'A 组有 20 种形态', '时间盒 45–60 分钟')
+$guardSamples = @(
+    '池子一共 18 个领域，别搞错',
+    'A 组有 20 种形态',
+    '时间盒 45–60 分钟',
+    '一整套一共 3 个档位，按抽签结果来'
+)
 foreach ($pat in $guardPatterns) {
     $hit = @($guardSamples | Where-Object { $_ -match $pat })
     Assert-That ("反漂移模式「{0}」能命中已知坏例" -f $pat) ($hit.Count -ge 1) '没有坏例能命中它 = 死模式'
 }
+# 量词扩展逐词自检：把量词写进正则、坏例里却没有对应样本，等于新加的守卫从没被走到。
+foreach ($noun in '档位', '题位', '题') {
+    Assert-That ("反漂移量词「{0}」活着（能命中「3 个{0}」）" -f $noun) `
+        (("3 个$noun") -match $guardPatterns[0]) ("模式 1 = " + $guardPatterns[0])
+}
 
 $scannedLines = 0
 foreach ($gf in $guardFiles) {
+    $leaf = Split-Path -Leaf $gf
     if (-not (Test-Path -LiteralPath $gf)) {
-        Assert-That ("$(Split-Path -Leaf $gf) 存在（缺文件 = 扫描空转）") $false "$gf 不存在"
+        Assert-That ("$leaf 存在（缺文件 = 扫描空转）") $false "$gf 不存在"
         continue
     }
     $lines = @(Get-Content -LiteralPath $gf -Encoding UTF8)
     $scannedLines += $lines.Count
+    # 哨兵断言（只在文件存在时查）：解码漂了或文件被换成别的措辞时，下面那些中文正则
+    # 一条都匹配不上，这条是唯一会红的 —— 没有它，扫描的绿就不可信。
+    $sentinel = [string]$guardSentinels[$gf]
+    if (-not $sentinel) {
+        Assert-That ("$leaf 配了哨兵（没哨兵 = 解码漂移会静默变绿）") $false 'guardSentinels 里没有它'
+    } else {
+        Assert-That ("$leaf 含哨兵「$sentinel」（解码/换文漂移不得静默变绿）") `
+            (($lines -join "`n").Contains($sentinel)) `
+            ("未命中「$sentinel」—— 文件被换成别的措辞，或解码漂了（中文成了乱码）；本次扫描的绿不可信")
+    }
     for ($i = 0; $i -lt $lines.Count; $i++) {
         foreach ($pat in $guardPatterns) {
             if ($lines[$i] -match $pat) {
