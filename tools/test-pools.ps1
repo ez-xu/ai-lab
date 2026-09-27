@@ -5,11 +5,22 @@ $root = Split-Path -Parent $PSScriptRoot
 $pools = Get-Content (Join-Path $PSScriptRoot 'pools.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 
 $pass = 0; $fail = 0
-function Assert-That([string]$desc, [bool]$cond, [string]$why = '') {
-    if ($cond) { $script:pass++; Write-Host ("  OK   " + $desc) }
+# 注意：$cond 故意不加 [bool] 约束 —— PowerShell 绑定任何数组（哪怕 @()）都会
+# 抛转换错误，配合 $ErrorActionPreference='Stop' 会直接中断脚本而不是打印 FAIL。
+function Assert-That([string]$desc, $cond, [string]$why = '') {
+    if ([bool]$cond) { $script:pass++; Write-Host ("  OK   " + $desc) }
     else { $script:fail++; Write-Host ("  FAIL " + $desc + " —— " + $why) -ForegroundColor Red }
 }
 function Field($obj, [string]$name) { $obj.PSObject.Properties.Name -contains $name }
+# 集合断言：按排序后的集合比较，失败信息给出差集或实际内容
+function Assert-IdSet([string]$desc, $actual, $expected) {
+    $a = @($actual | Sort-Object -Unique)
+    $e = @($expected | Sort-Object -Unique)
+    $diff = @($a | Where-Object { $_ -notin $e }) + @($e | Where-Object { $_ -notin $a })
+    if ($diff.Count -eq 0) { Assert-That $desc $true }
+    elseif ($diff.Count -eq 1) { Assert-That $desc $false "差集 $($diff -join ',')" }
+    else { Assert-That $desc $false "实际 [$($a -join ',')]" }
+}
 
 Write-Host '=== pools.json 结构断言 ==='
 
@@ -41,7 +52,16 @@ Assert-That 'bForms 24 个' ($bForms.Count -eq 24) "实际 $($bForms.Count)"
 $allIds = @($aForms.id) + @($bForms.id)
 Assert-That '形态 id 全局唯一' (($allIds | Sort-Object -Unique).Count -eq $allIds.Count)
 Assert-That 'A 组 id 不跨组重名' (@($aForms.id | Where-Object { $_ -in @($bForms.id) }).Count -eq 0)
-Assert-That '形态池已扁平（顶层无 main/quick 子对象）' ($aForms[0].PSObject.Properties.Name -notcontains 'main')
+# 扁平化：两个池的每一项都不得再有 main/quick 子对象（不是只看首个）
+$stillNested = @()
+foreach ($p in @(@{ n = 'aForms'; v = $aForms }, @{ n = 'bForms'; v = $bForms })) {
+    foreach ($f in $p.v) {
+        $label = $f.id
+        if (-not $label) { $label = "$($p.n)[未扁平]" }
+        if ((Field $f 'main') -or (Field $f 'quick')) { $stillNested += $label }
+    }
+}
+Assert-That '形态池已扁平（aForms/bForms 每项均无 main/quick 子对象）' ($stillNested.Count -eq 0) ($stillNested -join ',')
 
 # --- 5. 形态必填字段与引用完整性 ---
 $carrierIds = @($pools.carriers | ForEach-Object { $_.id })
@@ -58,40 +78,56 @@ foreach ($f in ($aForms + $bForms)) {
     }
 }
 
-# --- 6. 受限形态数量 ---
+# --- 6. 受限形态数量与名单 ---
 $restricted = @(($aForms + $bForms) | Where-Object { Field $_ 'allowedTiers' })
 Assert-That '受限形态共 19 个' ($restricted.Count -eq 19) "实际 $($restricted.Count)"
+Assert-IdSet '受限形态 A 组恰为 A2,A8,A15,A17,A18（5 个）' @($aForms | Where-Object { Field $_ 'allowedTiers' }).id @('A2', 'A8', 'A15', 'A17', 'A18')
+Assert-IdSet '受限形态 B 组恰为 B2,B3,B4,B5,B9,B10,B12,B17,B18,B20,B21,B22,B23,B24（14 个）' @($bForms | Where-Object { Field $_ 'allowedTiers' }).id @('B2', 'B3', 'B4', 'B5', 'B9', 'B10', 'B12', 'B17', 'B18', 'B20', 'B21', 'B22', 'B23', 'B24')
 $onlyMain = @($restricted | Where-Object { $_.allowedTiers.Count -eq 1 -and $_.allowedTiers[0] -eq 'main' })
 Assert-That '仅主修的形态共 6 个' ($onlyMain.Count -eq 6) "实际 $($onlyMain.Count)"
+Assert-IdSet '仅主修名单恰为 B2,B4,B9,B10,B22,B23' @($onlyMain.id) @('B2', 'B4', 'B9', 'B10', 'B22', 'B23')
 
 # --- 7. 每个档位的可用形态数 ---
-foreach ($t in $tierIds) {
+# 六个数字全部钉死：改错任何一格都必须变红
+$tierAvail = [ordered]@{ micro = @{ A = 15; B = 10 }; quick = @{ A = 20; B = 18 }; main = @{ A = 20; B = 24 } }
+foreach ($t in $tierAvail.Keys) {
+    $aExp = $tierAvail[$t]['A']; $bExp = $tierAvail[$t]['B']
     $aN = @($aForms | Where-Object { -not (Field $_ 'allowedTiers') -or $t -in $_.allowedTiers }).Count
     $bN = @($bForms | Where-Object { -not (Field $_ 'allowedTiers') -or $t -in $_.allowedTiers }).Count
     Write-Host ("  INFO 档位 $t 可用：A $aN / B $bN")
     Assert-That "档位 $t 的 A 组候选非空" ($aN -gt 0)
     Assert-That "档位 $t 的 B 组候选非空" ($bN -gt 0)
+    Assert-That "档位 $t 可用形态 A $aExp / B $bExp" ($aN -eq $aExp -and $bN -eq $bExp) "实际 A $aN / B $bN"
 }
-$aMicro = @($aForms | Where-Object { -not (Field $_ 'allowedTiers') -or 'micro' -in $_.allowedTiers }).Count
-$bMicro = @($bForms | Where-Object { -not (Field $_ 'allowedTiers') -or 'micro' -in $_.allowedTiers }).Count
-$bQuick = @($bForms | Where-Object { -not (Field $_ 'allowedTiers') -or 'quick' -in $_.allowedTiers }).Count
-Assert-That '微练可用形态 A 15 / B 10' ($aMicro -eq 15 -and $bMicro -eq 10) "实际 A $aMicro / B $bMicro"
-Assert-That '快练可用形态 B 18' ($bQuick -eq 18) "实际 $bQuick"
 
 # --- 8. 冷却与容量 ---
 $cd = $pools.cooldown
 foreach ($k in 'domain', 'aForm', 'bForm', 'carrier', 'twist', 'tier') {
     Assert-That "cooldown 有键 $k" (Field $cd $k)
 }
-Assert-That 'aForm 池 > 冷却' ($aForms.Count -gt $cd.aForm) "$($aForms.Count) vs $($cd.aForm)"
-Assert-That 'bForm 池 > 冷却' ($bForms.Count -gt $cd.bForm) "$($bForms.Count) vs $($cd.bForm)"
-Assert-That 'carrier 池 > 冷却' ($pools.carriers.Count -gt $cd.carrier) "$($pools.carriers.Count) vs $($cd.carrier)"
-Assert-That 'domain 池 > 冷却' ($pools.domains.Count -gt $cd.domain) "$($pools.domains.Count) vs $($cd.domain)"
+$cdExpect = [ordered]@{ domain = 56; aForm = 17; bForm = 20; carrier = 8; twist = 6; tier = 2 }
+foreach ($k in $cdExpect.Keys) {
+    $actual = if (Field $cd $k) { $cd.$k } else { '(缺键)' }
+    Assert-That "cooldown.$k 恰为 $($cdExpect[$k])" ($actual -eq $cdExpect[$k]) "实际 $actual"
+}
+# 池容量 vs 冷却：键不存在时必须直接判 FAIL —— 「1 -gt $null」在 PS 里为 True，
+# 不显式挡掉就会出现「键被改名后断言反而变绿」的空转。
+$aFormCd = if (Field $cd 'aForm') { $cd.aForm } else { $null }
+$bFormCd = if (Field $cd 'bForm') { $cd.bForm } else { $null }
+$carrierCd = if (Field $cd 'carrier') { $cd.carrier } else { $null }
+$domainCd = if (Field $cd 'domain') { $cd.domain } else { $null }
+$twistCd = if (Field $cd 'twist') { $cd.twist } else { $null }
+Assert-That 'aForm 池 > 冷却' ($null -ne $aFormCd -and $aForms.Count -gt $aFormCd) "池 $($aForms.Count) vs 冷却 $(if ($null -eq $aFormCd) { '(缺键)' } else { $aFormCd })"
+Assert-That 'bForm 池 > 冷却' ($null -ne $bFormCd -and $bForms.Count -gt $bFormCd) "池 $($bForms.Count) vs 冷却 $(if ($null -eq $bFormCd) { '(缺键)' } else { $bFormCd })"
+Assert-That 'carrier 池 > 冷却' ($null -ne $carrierCd -and $pools.carriers.Count -gt $carrierCd) "池 $($pools.carriers.Count) vs 冷却 $(if ($null -eq $carrierCd) { '(缺键)' } else { $carrierCd })"
+Assert-That 'domain 池 > 冷却' ($null -ne $domainCd -and $pools.domains.Count -gt $domainCd) "池 $($pools.domains.Count) vs 冷却 $(if ($null -eq $domainCd) { '(缺键)' } else { $domainCd })"
 
 # --- 9. 约束 scope 与档位容量 ---
 $tAny = @($pools.twists | Where-Object { $_.scope -eq 'any' })
+$tMain = @($pools.twists | Where-Object { $_.scope -eq 'main' })
 Assert-That 'scope=any 的约束 11 个' ($tAny.Count -eq 11) "实际 $($tAny.Count)"
-Assert-That '非主修档的约束池 > 冷却' ($tAny.Count -gt $cd.twist) "$($tAny.Count) vs $($cd.twist)"
+Assert-That 'scope=main 的约束 5 个' ($tMain.Count -eq 5) "实际 $($tMain.Count)"
+Assert-That '非主修档的约束池 > 冷却' ($null -ne $twistCd -and $tAny.Count -gt $twistCd) "池 $($tAny.Count) vs 冷却 $(if ($null -eq $twistCd) { '(缺键)' } else { $twistCd })"
 Assert-That '约束 scope 只有 any/main' (@($pools.twists | Where-Object { $_.scope -notin 'any', 'main' }).Count -eq 0)
 
 # --- 10. 其它池非空 ---
