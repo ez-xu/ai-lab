@@ -1,15 +1,27 @@
 {
-  "version": 2,
-  "note": "AI-Lab 抽签池。这是机器可读的抽签数据源；CURRICULUM.md 是给人看的同一份内容的说明。改这里就能改每天的随机范围。",
+  "version": 3,
+  "note": "AI-Lab 抽签池 —— 机器可读的唯一事实源。档位、题位、形态、载体、约束、领域、冷却全在这里；两份提示词与文档不得复述其中的清单与数字。",
+
+  "tiers": [
+    { "id": "micro", "name": "微练", "minutes": [10, 15], "weight": 15 },
+    { "id": "quick", "name": "快练", "minutes": [20, 30], "weight": 35 },
+    { "id": "main",  "name": "主修", "minutes": [45, 60], "weight": 50 }
+  ],
+
+  "slots": [
+    { "id": "A", "role": "广度", "pool": "aForms", "picksDomain": true  },
+    { "id": "B", "role": "框架", "pool": "bForms", "picksDomain": false }
+  ],
+
+  "tierPairRule": "distinct",
 
   "cooldown": {
     "domain": 56,
-    "aFormMain": 5,
-    "aFormQuick": 5,
-    "bFormMain": 8,
-    "bFormQuick": 6,
+    "aForm": 17,
+    "bForm": 20,
     "carrier": 8,
-    "twist": 6
+    "twist": 6,
+    "tier": 2
   },
 
   "domains": [
@@ -75,47 +87,39 @@
     { "id": "d60", "name": "遗留系统现代化", "anchors": ["绞杀者模式", "双写与对账", "数据迁移与灰度切流", "接口兼容层", "回滚预案与演练"] }
   ],
 
-  "aForms": {
-    "main": [
+  "aForms": [
       { "id": "A1", "name": "拆经典", "what": "挑一个经典系统跑起来、改一处、讲清机制", "deliverable": "机制笔记 + 一次可复现的改动", "carriers": ["c01", "c03", "c05", "c10"] },
-      { "id": "A2", "name": "复现思想", "what": "把一篇论文 / 一个规范的核心思想落成 200 行可运行代码", "deliverable": "可运行代码 + 与原文的差异说明", "carriers": ["c02", "c03", "c05"] },
+      { "id": "A2", "name": "复现思想", "what": "把一篇论文 / 一个规范的核心思想落成 200 行可运行代码", "deliverable": "可运行代码 + 与原文的差异说明", "carriers": ["c02", "c03", "c05"], "allowedTiers": ["quick", "main"] },
       { "id": "A3", "name": "领域地图", "what": "进一个完全陌生的领域，画出它的地图", "deliverable": "一页地图：主要流派、核心权衡、入门路径", "carriers": ["c06", "c05", "c12", "c08"] },
-      { "id": "A7", "name": "源码走读", "what": "沿一条真实调用链走到底，画出控制流与数据结构的每次变化", "deliverable": "调用链图 + 关键函数职责表 + 一处你原以为会怎样但实际不是的发现", "carriers": ["c01", "c11", "c07"] },
-      { "id": "A8", "name": "黑盒探测", "what": "拿一个现成系统当黑盒，用一组实验反推它内部采用的策略", "deliverable": "实验设计表 + 实测数据 + 反推出的策略及置信度", "carriers": ["c11", "c01", "c09", "c10"] },
-      { "id": "A9", "name": "故障解剖", "what": "读一份真实事故复盘 / issue 长线程，还原根因链与触发条件", "deliverable": "时间线 + 根因链（含每一环的为什么）+ 触发条件清单 + 一条能提前发现的监控指标", "carriers": ["c04", "c09", "c11"] }
-    ],
-    "quick": [
       { "id": "A4", "name": "速读经典", "what": "读一篇论文 / 一份 RFC / 一份设计文档，只抓骨架", "deliverable": "≤600 字结构化笔记（问题 → 方案 → 代价 → 我能用在哪）", "carriers": ["c02", "c03", "c06"] },
       { "id": "A5", "name": "系统对比", "what": "挑两个解决同一问题的系统，找到它们真正的分歧点", "deliverable": "一页对比表 + 一句「如果我来选，选哪个、为什么」", "carriers": ["c08", "c01", "c05"] },
       { "id": "A6", "name": "术语地图", "what": "把一个领域的高频黑话理成一张有依赖关系的图", "deliverable": "一张术语图（≥12 个词）+ 每个词一句「它解决什么」", "carriers": ["c06", "c05", "c12"] },
+      { "id": "A7", "name": "源码走读", "what": "沿一条真实调用链走到底，画出控制流与数据结构的每次变化", "deliverable": "调用链图 + 关键函数职责表 + 一处你原以为会怎样但实际不是的发现", "carriers": ["c01", "c11", "c07"] },
+      { "id": "A8", "name": "黑盒探测", "what": "拿一个现成系统当黑盒，用一组实验反推它内部采用的策略", "deliverable": "实验设计表 + 实测数据 + 反推出的策略及置信度", "carriers": ["c11", "c01", "c09", "c10"], "allowedTiers": ["quick", "main"] },
+      { "id": "A9", "name": "故障解剖", "what": "读一份真实事故复盘 / issue 长线程，还原根因链与触发条件", "deliverable": "时间线 + 根因链（含每一环的为什么）+ 触发条件清单 + 一条能提前发现的监控指标", "carriers": ["c04", "c09", "c11"] },
       { "id": "A10", "name": "规范精读", "what": "精读一份规范里的一节，抠出 MUST/SHOULD 与互操作陷阱", "deliverable": "一页合规清单：必须做 / 建议做 / 常见误读", "carriers": ["c03", "c05", "c08"] },
       { "id": "A11", "name": "最小实验", "what": "设计一个 30 行以内能跑的实验，验证或推翻一个直觉", "deliverable": "脚本 + 原始输出 + 结论（直觉成立 / 不成立 / 有条件成立）", "carriers": ["c11", "c09", "c01", "c10"] },
       { "id": "A12", "name": "生态测绘", "what": "把一个领域的工具与项目按定位排成一张图，标出谁替代谁", "deliverable": "一页生态图 + 3 条选型建议（含一条「别用」）", "carriers": ["c12", "c08", "c01"] }
-    ]
-  },
+  ],
 
-  "bForms": {
-    "main": [
+  "bForms": [
       { "id": "B1", "name": "接口设计", "what": "模糊需求 → 定义 API / 协议 / 生命周期", "deliverable": "接口定义 + ADR（含权衡表）", "carriers": ["c07", "c01", "c08"] },
-      { "id": "B2", "name": "抽象提炼", "what": "3 段重复实现 → 带扩展点的库", "deliverable": "库 + 迁移前后对比", "carriers": ["c07", "c01", "c08"] },
-      { "id": "B3", "name": "重构手术", "what": "一个能跑但烂的实现 → 好结构", "deliverable": "重构后代码 + 变更说明（为什么这么切）", "carriers": ["c07", "c01", "c11"] },
-      { "id": "B4", "name": "生产化", "what": "原型 → 可观测 / 可配置 / 可降级 / 可测试", "deliverable": "改造后的模块 + 失败场景清单", "carriers": ["c07", "c11", "c09"] },
-      { "id": "B5", "name": "方案落地", "what": "一个真实系统或论文 → 你的工程方案", "deliverable": "架构图 + 关键决策 + 放弃的方案及理由", "carriers": ["c02", "c05", "c08", "c10"] },
-      { "id": "B9", "name": "协议设计", "what": "设计一个线协议或文件格式，含版本演进与兼容规则", "deliverable": "格式规范 + 编解码实现 + 兼容性测试（旧版本能读新数据）", "carriers": ["c03", "c05", "c08"] },
-      { "id": "B10", "name": "扩展点设计", "what": "给一个已有系统设计插件 / 钩子机制，且内核不被污染", "deliverable": "扩展点契约 + 两个插件 + 隔离与失败边界说明", "carriers": ["c01", "c07", "c08"] },
-      { "id": "B11", "name": "状态机建模", "what": "把一团 if/else 变成显式状态机", "deliverable": "状态图 + 表驱动实现 + 非法转移的拒绝测试", "carriers": ["c07", "c05", "c10"] },
-      { "id": "B12", "name": "失败模式设计", "what": "为一条关键路径设计超时 / 重试 / 降级 / 幂等", "deliverable": "失败矩阵 + 实现 + 注入实验（真的让它失败一次）", "carriers": ["c04", "c11", "c09"] }
-    ],
-    "quick": [
+      { "id": "B2", "name": "抽象提炼", "what": "3 段重复实现 → 带扩展点的库", "deliverable": "库 + 迁移前后对比", "carriers": ["c07", "c01", "c08"], "allowedTiers": ["main"] },
+      { "id": "B3", "name": "重构手术", "what": "一个能跑但烂的实现 → 好结构", "deliverable": "重构后代码 + 变更说明（为什么这么切）", "carriers": ["c07", "c01", "c11"], "allowedTiers": ["quick", "main"] },
+      { "id": "B4", "name": "生产化", "what": "原型 → 可观测 / 可配置 / 可降级 / 可测试", "deliverable": "改造后的模块 + 失败场景清单", "carriers": ["c07", "c11", "c09"], "allowedTiers": ["main"] },
+      { "id": "B5", "name": "方案落地", "what": "一个真实系统或论文 → 你的工程方案", "deliverable": "架构图 + 关键决策 + 放弃的方案及理由", "carriers": ["c02", "c05", "c08", "c10"], "allowedTiers": ["quick", "main"] },
       { "id": "B6", "name": "代码考古", "what": "读一个成熟库的公开接口，逆推它的设计意图", "deliverable": "一页「它为什么长这样」+ 3 条可借鉴 / 3 条不认同", "carriers": ["c01", "c08", "c12"] },
       { "id": "B7", "name": "微设计", "what": "只设计一个函数 / 一个类型 / 一个配置格式，做到能用", "deliverable": "签名 + 3 个调用示例 + 边界情况清单", "carriers": ["c07", "c05", "c10"] },
       { "id": "B8", "name": "决策快写", "what": "面对一个真实取舍，写一份能说服人的 ADR", "deliverable": "1 页 ADR：选项 / 判据 / 结论 / 反悔条件", "carriers": ["c08", "c02", "c12"] },
+      { "id": "B9", "name": "协议设计", "what": "设计一个线协议或文件格式，含版本演进与兼容规则", "deliverable": "格式规范 + 编解码实现 + 兼容性测试（旧版本能读新数据）", "carriers": ["c03", "c05", "c08"], "allowedTiers": ["main"] },
+      { "id": "B10", "name": "扩展点设计", "what": "给一个已有系统设计插件 / 钩子机制，且内核不被污染", "deliverable": "扩展点契约 + 两个插件 + 隔离与失败边界说明", "carriers": ["c01", "c07", "c08"], "allowedTiers": ["main"] },
+      { "id": "B11", "name": "状态机建模", "what": "把一团 if/else 变成显式状态机", "deliverable": "状态图 + 表驱动实现 + 非法转移的拒绝测试", "carriers": ["c07", "c05", "c10"] },
+      { "id": "B12", "name": "失败模式设计", "what": "为一条关键路径设计超时 / 重试 / 降级 / 幂等", "deliverable": "失败矩阵 + 实现 + 注入实验（真的让它失败一次）", "carriers": ["c04", "c11", "c09"], "allowedTiers": ["quick", "main"] },
       { "id": "B13", "name": "契约与兼容", "what": "给一个接口写清兼容性规则：什么能改、什么绝对不能", "deliverable": "一页兼容性契约 + 破坏性变更清单 + 一条自动检查", "carriers": ["c05", "c01", "c03"] },
       { "id": "B14", "name": "边界速写", "what": "给一个函数或模块列清边界与非法输入", "deliverable": "边界清单 + 可执行断言（能跑出红/绿）", "carriers": ["c07", "c03", "c10"] },
       { "id": "B15", "name": "依赖决策", "what": "面对「引库 vs 自己写」，写一份可复用的判据", "deliverable": "一页判据表 + 结论 + 反悔条件（什么情况下该推倒重来）", "carriers": ["c08", "c12", "c01"] },
       { "id": "B16", "name": "结构复盘", "what": "拿自己写过的代码，画出它实际的结构并指出一处该拆的地方", "deliverable": "结构图 + 一处重构提案（含风险与验证方式）", "carriers": ["c07", "c11", "c01"] }
-    ]
-  },
+  ],
 
   "carriers": [
     { "id": "c01", "name": "开源项目源码", "hint": "读真实实现，别读二手总结" },
