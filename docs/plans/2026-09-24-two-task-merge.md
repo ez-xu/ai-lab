@@ -606,6 +606,27 @@ Assert-That 'B 组覆盖 ≥ 20 种（池 24）' ($seenB.Keys.Count -ge 20) "实
 Assert-That '领域覆盖 ≥ 25（池 60）' ($seenDomain.Keys.Count -ge 25) "实际 $($seenDomain.Keys.Count)"
 ```
 
+> **断言 5 必须用累积历史**（见「已知取舍」）：循环里每抽完一天，就把 `@{ date = $day; picks = $pick.picks }` 追加进一个本地的 v2 历史对象并用它继续抽下一天。否则冷却全程不生效，覆盖率与下面的零告警断言都测不到真东西（实现者实测：不累积时 A 组只覆盖 16/20）。
+
+- [ ] **Step 2b: 写断言 5b（档位冷却的零告警守卫）**
+
+容量断言（断言 4）里 `池 3 > 冷却 1` 恒真，**发现不了「窗口过约束」**——那正是 Task 4 踩过的坑（`cooldown.tier = 2` 时 500 天里 179 天无解）。所以必须单独守：
+
+```powershell
+# --- 断言 5b：档位冷却不得让步（过约束的唯一真实守卫）---
+$tierWarn = 0
+foreach ($day in $days) {
+    $pick = Get-DailyPick -Date $day -Pools $pools -History $simHist
+    $tierWarn += @($pick.warnings | Where-Object { $_ -match '档位冷却让步' }).Count
+    $simHist.entries += @{ date = $day; picks = $pick.picks }
+}
+Assert-That '30 个工作日内无档位冷却让步' ($tierWarn -eq 0) "实际 $tierWarn 次"
+Assert-That '没有一天两题档位相同（再确认）' (@($days | Where-Object {
+    $p = Get-DailyPick -Date $_ -Pools $pools -History $simHist
+    $p.picks.A.tier -eq $p.picks.B.tier
+}).Count -eq 0)
+```
+
 - [ ] **Step 3: 写断言 6（反漂移扫描）**
 
 ```powershell
