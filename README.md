@@ -76,7 +76,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\daily-generate.ps1
 - **同日不重复是硬保证**：两题的载体、约束互不相同
 
 改池子或冷却窗口 → 编辑 `tools\pools.json`，然后跑 `tools\test-pools.ps1`（池子结构）与
-`tools\test-pick.ps1`（抽签行为：配比 / 互异 / 兼容 / 容量 / 覆盖 / 反漂移扫描）。
+`tools\test-pick.ps1`（抽签行为：配比 / 互异 / 兼容 / 容量 / 覆盖 / 档位冷却零告警 / 反漂移扫描）。
 
 ## 怎么用
 
@@ -85,7 +85,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\daily-generate.ps1
 | 早上打开电脑 | 直接看 `daily\<今天日期>.md`（工作日 7:30 已自动生成） |
 | 想立刻要 / 自动生成失败了 | 在 DSH GUI 里说一句：**布置今天的任务** |
 | 想看今天会抽到什么 | `tools\pick.ps1`（不带参数 = 今天；加 `-NoWrite` 只看不记） |
-| 写完了 | 说 **复盘 2026-09-23**（换成当天日期），我会按验收标准逐条核对并调难度 |
+| 写完了 | 说 **复盘 2026-09-28**（换成当天日期），我会按验收标准逐条核对并调难度 |
 | 想开关自动化 | 双击 `tools\AI-Lab开关.cmd`，或说"关掉每日任务自动生成" |
 | 周末想加练 | `tools\AI-Lab开关.cmd` → 选 4（忽略日历强制出题） |
 | 想看未来哪天出题 | `tools\AI-Lab开关.cmd` → 选 5 |
@@ -120,7 +120,7 @@ ai-lab\
     ├─ calendar.ps1            ← 出题日历判定（生成器与开关共用）
     ├─ daily-generate.ps1      ← 生成器（计划任务调用）
     ├─ test-pools.ps1          ← 池子结构自检（键 / 容量 / allowedTiers / 锚点…）
-    ├─ test-pick.ps1           ← 抽签行为自检（配比 / 互异 / 兼容 / 容量 / 覆盖 / 反漂移）
+    ├─ test-pick.ps1           ← 抽签行为自检（配比 / 互异 / 兼容 / 容量 / 覆盖 / 档位冷却零告警 / 反漂移）
     ├─ test-calendar.ps1       ← 日历自检（35 个已知用例）
     ├─ normalize-encoding.ps1  ← 编码规范化（.ps1 补 BOM / .json 去 BOM）
     ├─ toggle.ps1              ← 开关 / 状态 / 日历预览

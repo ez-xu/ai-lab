@@ -36,7 +36,7 @@
 - `PROGRESS.md` 打卡表改为 7 列（`题A 广度` / `题B 框架` / `档位组合`），旧四题记录移入「旧四题模型记录」小节
 - `config.json`：`timeBudgetMinutes` 150 → 90、`focus` 改为 `1 breadth + 1 framework`
 - `examples\` 样例换成本次引擎真实产出的两题文件（`examples\2026-09-28.md`，路径脱敏为 `{{ROOT}}`）
-- `CURRICULUM.md` / `README.md` 里复述的容量与分钟数全部改为指向 `tools\pools.json`（文档只讲机制，不复述数字）
+- `CURRICULUM.md` / `README.md` 里复述的**池子容量与各档分钟数**改为指向 `tools\pools.json`（文档只讲机制，不复述数字）；只有「最重的一天 65–90 分钟」保留——它是预算规则，不是池子数据
 
 ---
 

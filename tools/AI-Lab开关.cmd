@@ -6,7 +6,7 @@ set "PS=powershell.exe -NoProfile -ExecutionPolicy Bypass"
 
 echo.
 echo   ================================================
-echo     AI-Lab  Daily Four Tasks  -  Switch
+echo     AI-Lab  Daily Two Tasks  -  Switch
 echo   ================================================
 echo.
 
