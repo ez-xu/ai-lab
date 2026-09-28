@@ -16,6 +16,10 @@
   主修，两题档位必然不同。形态先按档位过滤 allowedTiers 再抽，所以不会出现
   「15 分钟做 200 行可运行代码」这种组合。
 
+  题位 A 的领域行下面还会渲染该领域的「锚点」（pools.json → domains[].anchors），
+  因为取材角度不能留给模型现编：没有锚点，模型会退回自己最熟的那几个话题上。
+  题位 B 不绑领域，所以没有这一行。
+
   用法：
     # 直接跑（预览今天，并写入历史）
     powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\pick.ps1
@@ -39,6 +43,12 @@ param(
     [switch]$Library,
     [switch]$Emit
 )
+
+# 本脚本所在目录。这里取 $PSCommandPath（它永远指向**本文件**，即使脚本是被
+# dot-source 的），不能在函数里用 $PSScriptRoot —— 被 daily-generate.ps1 dot-source
+# 之后，那个值在函数体里指向调用方的目录。整天数计算（Get-AiLabDayNumber）要按
+# 本脚本的位置定位 daily\，否则会安静地数错目录。
+$AiLabToolsDir = Split-Path -Parent $PSCommandPath
 
 # ---------------- 基础 IO ----------------
 
@@ -395,6 +405,36 @@ function Get-DailyPick {
 
 # ---------------- 渲染 ----------------
 
+function Get-AiLabDayNumber {
+    <#  算「第 N 天」：daily\ 下已落盘的日期文件数（排除 $Date 当天的文件）+ 1。
+
+        这里是**唯一**的一处实现：Format-AiLabPick 与 daily-generate.ps1 都调它。
+        以前两边各写一份同样的 count 逻辑，改动一处忘了另一处就会让提示词里的
+        「第 N 天」和 PROGRESS.md 打卡表的第 N 天对不上，而且一声不响。
+
+        两个刻意的取舍：
+          · 目录以 $AiLabToolsDir 定位（本脚本自己的位置），不用 $PSScriptRoot ——
+            被 dot-source 时后者在函数体里会指向调用方。
+          · $Date 当天的文件不计入。重出（daily-generate.ps1 -Force）会先把当天文件
+            挪走，不排除的话当天文件会被数两次，N 直接偏大 1。
+        目录不存在时返回 1：直接跑 pick.ps1 预览一个还没建 daily\ 的克隆也要自成一体。
+
+        注意口径：数是「已落盘的日期文件数」，所以补写或手工丢一个带日期的 .md 进来
+        会让后面的天数整体 +1。这是既定口径（不是 bug），两侧一致即可 —— 由
+        tools\test-pick.ps1 的断言 6b 守着「两处一致」。#>
+    param([string]$Date)
+    $count = 0
+    $dailyDir = if ($AiLabToolsDir) { Join-Path (Split-Path -Parent $AiLabToolsDir) 'daily' } else { '' }
+    if ($dailyDir -and (Test-Path -LiteralPath $dailyDir)) {
+        $count = @(Get-ChildItem -Path $dailyDir -Filter '*.md' -File |
+                   Where-Object {
+                       $_.BaseName -match '^\d{4}-\d{2}-\d{2}$' -and
+                       $_.BaseName -ne [string]$Date
+                   }).Count
+    }
+    return $count + 1
+}
+
 function Format-AiLabPick {
     <#  渲染「今日抽签」文本块（输出契约见设计规格 §4.3）。
         这段文本就是 tools\prompt.md 里 {{ASSIGNMENT}} 的替换内容，逐字交给模型。 #>
@@ -423,17 +463,8 @@ function Format-AiLabPick {
         if (-not $parsed) { $parsed = [datetime]::TryParse([string]$Pick.date, [ref]$dt) }
         if ($parsed) { $weekday = $dt.ToString('dddd', [System.Globalization.CultureInfo]::GetCultureInfo('zh-CN')) }
     }
-    $dayNo = 1
-    if ($PSScriptRoot) {
-        $dailyDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'daily'
-        if (Test-Path -LiteralPath $dailyDir) {
-            $dayNo = @(Get-ChildItem -Path $dailyDir -Filter '*.md' -File |
-                       Where-Object {
-                           $_.BaseName -match '^\d{4}-\d{2}-\d{2}$' -and
-                           $_.BaseName -ne [string]$Pick.date
-                       }).Count + 1
-        }
-    }
+    # 天数走 Get-AiLabDayNumber（与 daily-generate.ps1 同一处实现，见该函数的注释）。
+    $dayNo = Get-AiLabDayNumber -Date ([string]$Pick.date)
 
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add('## 今日抽签（唯一事实源：tools\pools.json）')
@@ -459,6 +490,14 @@ function Format-AiLabPick {
             $d = $dom[$p.domain]
             if (-not $d) { throw "题位 $($slotDef.id) 的领域 id 查不到：$($p.domain)" }
             $lines.Add("- 领域：$($d.id) $($d.name) ｜ 载体：$($c.id) $($c.name) ｜ 约束：$($w.id) $($w.name)")
+            # 锚点是每个领域在 pools.json 里**策展好的取材入口**。题位 A 是唯一绑领域的
+            # 题位，模型对这个领域多半不熟（不熟正是这题存在的意义）—— 不给锚点，它就会
+            # 现编一个角度，退回到自己那几个熟门熟路的话题上，抽签想消掉的偏差全回来了。
+            # 微练档最吃这一条：档位规则明说不要做调研，没锚点就只剩模型的先验。
+            # 锚点用 ` / ` 连成一行（全角 ｜ 留给字段分隔，不混用）。
+            $anchorText = ''
+            if ($d.anchors) { $anchorText = (@($d.anchors) -join ' / ') }
+            if ($anchorText) { $lines.Add("- 领域锚点（取材入口）：$anchorText") }
         } else {
             $lines.Add("- 载体：$($c.id) $($c.name) ｜ 约束：$($w.id) $($w.name)")
         }

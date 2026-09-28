@@ -26,6 +26,8 @@
     6. 反漂移：prompt.md、skill\SKILL.md 与 queue.md 不得复述池子容量与档位分钟数
        （三份都是**模型要读的文档** —— queue.md 在 SKILL.md 的「读上下文」必读清单和
        prompt.md 里都被点名 —— 里面的硬编码数字会和 pools.json 漂开，所以要扫）
+    6b. 天数同源：「第 N 天」由 Get-AiLabDayNumber 一处算，Format-AiLabPick 渲染出的
+       数字必须等于它，且口径仍是「daily\ 下的日期文件数 + 1」
 
   两条实现约束（踩过才写下来的）：
     · 模拟必须自己累积历史。state\history.json 已经是 v2（槽位 A/B + tier），
@@ -392,7 +394,7 @@ Write-Host ("  INFO 30 天覆盖：A 形态 {0}/{1}、B 形态 {2}/{3}、领域 
 
 Assert-That "A 组 $($aForms.Count) 种形态全覆盖" ($seenA.Keys.Count -eq $aForms.Count) `
     "实际 $($seenA.Keys.Count)/$($aForms.Count)"
-Assert-That "B 组覆盖 ≥ 20 种（池 $($bForms.Count)）" ($seenB.Keys.Count -ge 20) `
+Assert-That "B 组覆盖 ≥ 24 种（池 $($bForms.Count)）" ($seenB.Keys.Count -ge 24) `
     "实际 $($seenB.Keys.Count)/$($bForms.Count)"
 Assert-That "领域覆盖 ≥ 25 个（池 $($domainIds.Count)）" ($seenDomain.Keys.Count -ge 25) `
     "实际 $($seenDomain.Keys.Count)/$($domainIds.Count)"
@@ -503,6 +505,40 @@ foreach ($gf in $guardFiles) {
 }
 # 扫描必须真的读到内容：两份文件都不存在时上面只会报「不存在」，这条挡的是扫描彻底空转
 Assert-That '反漂移扫描读到了内容（不是空转）' ($scannedLines -gt 0) "共读 $scannedLines 行"
+
+# ============================================================
+# 断言 6b：天数同源（Format-AiLabPick 渲染 vs Get-AiLabDayNumber）
+# ============================================================
+Write-Section '断言 6b：天数同源（Format-AiLabPick 与 Get-AiLabDayNumber）'
+
+# 「第 N 天」是用户看得见的值：它同时进 tools\prompt.md 的首行与 PROGRESS.md 打卡表。
+# 以前 Format-AiLabPick 与 daily-generate.ps1 各算一遍 `count(daily/*.md) + 1`，
+# 两处一致时谁也看不出问题，漂开之后两张表会各说各话（改动一处忘了另一处）。
+# 现在两处共用 Get-AiLabDayNumber，这条断言钉的就是那个「共用」。
+$qDate   = '2099-12-31'   # 取一个 daily\ 里**不可能有**文件的日期：排除当天那条分支不干扰，
+                          # 期望值 = 全部日期文件数 + 1，是有内容的数字（不是恒等式）。
+                          # 换成一个会被补写的近期日期，这条断言会悄悄退化成同义反复。
+$qPick   = Get-DailyPick -Date $qDate -Pools $pools -History $emptyHist
+$qRender = Format-AiLabPick -Pick $qPick -Pools $pools
+$qDayNo  = Get-AiLabDayNumber -Date $qDate
+$qLine   = (@(($qRender -split "`n") | Where-Object { $_ -match '日期：' }) -join ' ') -replace '\s+$', ''
+Assert-That 'Format-AiLabPick 渲染出的「第 N 天」= Get-AiLabDayNumber 的返回值' `
+    ($qRender -match ("第\s*" + [regex]::Escape([string]$qDayNo) + "\s*天")) `
+    ("期望「第 $qDayNo 天」，渲染里没有 —— 实际日期行：" + $qLine)
+
+# 两侧口径的**定义**必须仍是「daily 下的日期文件数 + 1」（多一个少一个都要现形）。
+# 上一条只保证渲染与函数同值；函数本身被改成「数别的东西」时由这条抓。
+$qFiles  = @(Get-ChildItem -Path (Join-Path $root 'daily') -Filter '*.md' -File |
+             Where-Object { $_.BaseName -match '^\d{4}-\d{2}-\d{2}$' })
+$qExpect = ($qFiles | Where-Object { $_.BaseName -ne $qDate }).Count + 1
+Assert-That '天数口径 = daily\ 下日期文件数（排除当天）+ 1' ($qDayNo -eq $qExpect) `
+    ("函数给 {0}，按 daily\ 数出来是 {1}（$($qFiles.Count) 个日期文件，$qDate 不在其中）" -f $qDayNo, $qExpect)
+Assert-That 'daily\ 里已有日期文件（否则上面两条退化成恒等，等于空转）' ($qFiles.Count -gt 0) `
+    "找到 $($qFiles.Count) 个"
+
+# 排除 $Date 当天这条分支的现实可达性：仓库里当天**已有**文件时（重出场景），
+# 不排除就会把当天文件数两次、N 偏大 1。这里的日期还没有文件，只报事实不判红。
+Write-Host ("  INFO 天数实测：$qDate → 第 $qDayNo 天；daily\ 共 $($qFiles.Count) 个日期文件")
 
 # ============================================================
 # 汇总

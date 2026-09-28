@@ -136,6 +136,21 @@ Assert-That 'carriers 12 个' ($pools.carriers.Count -eq 12) "实际 $($pools.ca
 Assert-That 'twists 16 个' ($pools.twists.Count -eq 16) "实际 $($pools.twists.Count)"
 Assert-That '每个 domain 有 anchors' (@($pools.domains | Where-Object { -not $_.anchors -or $_.anchors.Count -eq 0 }).Count -eq 0)
 
+# --- 11. 形态名称非空（比"字段存在"强一档）---
+# 上面第 5 节的「有字段 $k」只证明键在，空字符串一样绿。而 daily-generate.ps1 的自检
+# 是 `$text -notmatch [regex]::Escape([string]$item.name)`，[regex]::Escape('') = ''，
+# `-notmatch ''` 恒为 $false —— 一个 "name": "" 会让「形态有没有落到文件里」这一轴
+# **静默通过**。那条自检本身也补了空名兜底，这里从数据源头再堵一道：断言的是
+# 「有非空白的内容」，不是「有键」。
+$blankField = @()
+foreach ($f in ($aForms + $bForms)) {
+    foreach ($k in 'id', 'name', 'what', 'deliverable') {
+        if ([string]::IsNullOrWhiteSpace([string]$f.$k)) { $blankField += "$($f.id).$k" }
+    }
+}
+Assert-That '形态的 id/name/what/deliverable 均非空白（空串会让日常自检静默变绿）' `
+    ($blankField.Count -eq 0) ($blankField -join ',')
+
 Write-Host ''
 if ($fail -eq 0) { Write-Host "全部 $pass 项断言通过" -ForegroundColor Green; exit 0 }
 else { Write-Host "$fail 项失败，$pass 项通过" -ForegroundColor Red; exit 1 }

@@ -100,8 +100,9 @@ if ($Force -and (Test-Path $target)) {
 $runStart = Get-Date
 
 # ---------- 4. 组装提示词 ----------
-$dayNo = @(Get-ChildItem -Path $dailyDir -Filter '*.md' -File |
-           Where-Object { $_.BaseName -match '^\d{4}-\d{2}-\d{2}$' -and $_.BaseName -ne $day }).Count + 1
+# 天数走 pick.ps1 的 Get-AiLabDayNumber（唯一实现）：提示词里的「第 N 天」与
+# PROGRESS.md 打卡表的第 N 天必须同源，两边各写一份 count 逻辑就会悄悄漂开。
+$dayNo = Get-AiLabDayNumber -Date $day
 
 $promptPath = Join-Path $PSScriptRoot 'prompt.md'
 if (-not (Test-Path $promptPath)) { Write-Log "找不到提示词文件：$promptPath"; exit 1 }
@@ -125,22 +126,29 @@ try {
 # ---------- 4c. 档位 → 深度（规格 §4.2.1）----------
 # 档位不换形态，只缩放产出深度。提示条数进模板占位符 __HINTS_A__ / __HINTS_B__；
 # 验收条数没有占位符，写进 prompt.md 让模型落笔（那边同表）。
-# 两个表都不认识的档位 id 必须当场报错：查不到会长成「最多  条」这种空值，不会自己现形。
+# 表里没有的档位在下面打印 ?（不是空值）：查不到时长成「最多  条」的空值，不会自己现形。
 $hintMap = @{ micro = 1; quick = 2; main = 3 }
 $critMap = @{ micro = 2; quick = 3; main = 4 }
 
-# 题位名来自 pools.slots：v3 只有 A / B 两个题位（旧版是 A1/A2/B1/B2）。
-# 这里若还按旧名遍历，$pick.picks.A1 是 $null，四个字段会全部打印成空（踩过一次，静默）。
-foreach ($s in @('A', 'B')) {
+# 题位名来自 pools.slots，**不写死**：写死等于把 pools.json 的事实源偷偷复制一份到代码里，
+# 往 pools.slots 里再加一个题位时它会静默漏掉 —— 旧版遍历 @('A1','A2','B1','B2') 就是这么
+# 被落下的：$pick.picks.A1 是 $null，四个字段全打印成空，一声不响（踩过一次）。
+# 深度映射表（$hintMap/$critMap）是"两题模型"的产物，映射表里没有的档位打印 ? 而不是中断：
+# 这样新题位的抽签结果照样落进日志，不会被这条循环悄悄吃掉。题位整个缺失才是真失败。
+foreach ($slotDef in @($pools.slots)) {
+    $s = [string]$slotDef.id
     $p = $pick.picks.$s
-    $tierId = [string]$p.tier
-    if (-not $hintMap.ContainsKey($tierId) -or -not $critMap.ContainsKey($tierId)) {
-        Write-Log "抽签失败：档位 id「$tierId」（题位 $s）不在深度映射表里（pools.tiers 改名了？）"
+    if (-not $p) {
+        Write-Log "抽签失败：题位「$s」在抽签结果里不存在（pools.slots 与 Get-DailyPick 对不上）"
         exit 1
     }
+    $tierId   = [string]$p.tier
+    $hintText = '?'; $critText = '?'
+    if ($hintMap.ContainsKey($tierId)) { $hintText = [string]$hintMap[$tierId] }
+    if ($critMap.ContainsKey($tierId)) { $critText = [string]$critMap[$tierId] }
     $domainText = if ($p.domain) { $p.domain } else { '（不绑领域）' }
     Write-Log ("  抽签 {0}: 档位={1} 领域={2} 形态={3} 载体={4} 约束={5} 提示≤{6} 验收{7}条" -f `
-               $s, $tierId, $domainText, $p.form, $p.carrier, $p.twist, $hintMap[$tierId], $critMap[$tierId])
+               $s, $tierId, $domainText, $p.form, $p.carrier, $p.twist, $hintText, $critText)
 }
 if ($pick.warnings.Count -gt 0) { Write-Log ("  抽签告警：" + ($pick.warnings -join '；')) }
 
@@ -156,8 +164,10 @@ $formById   = @{}; foreach ($f in @($pools.aForms) + @($pools.bForms)) { $formBy
 $domainById = @{}; foreach ($d in $pools.domains)                      { $domainById[$d.id] = $d }
 
 $resolved = Get-Content $templatePath -Raw -Encoding UTF8
+# 同样按 pools.slots 遍历：题位名是数据，不是代码里的常量。
 $tierOf   = @{}
-foreach ($s in @('A', 'B')) {
+foreach ($slotDef in @($pools.slots)) {
+    $s = [string]$slotDef.id
     $p = $pick.picks.$s
     if (-not $p) { Write-Log "模板解析失败：抽签结果里没有题位 $s"; exit 1 }
     $t = $tierById[[string]$p.tier]
@@ -271,21 +281,33 @@ if (Test-Path $target) {
     # 旧版遍历 @('A1','A2') 读 $pick.picks.A1 —— 那个值是 $null，于是
     # `if (-not $p.domain) { continue }` 会跳过每一个槽位，这条自检永远不会失败
     # （一个被悄悄摘掉的安全网：错了也报成功）。
-    # 改按 pools.slots 的题位名遍历，判据对两个题位都可检验：
-    # 题位 A 要求领域与形态都非空，题位 B 不绑领域、只要求形态非空。
+    # 现在按 pools.slots 的题位名遍历，且 A/B 轴期望由题位自己的 picksDomain 决定
+    # （不写 if ($s -eq 'A')：题位名是数据，判据也该跟着数据走）：
+    #   题位 A picksDomain=true  → 领域与形态都必须非空
+    #   题位 B picksDomain=false → 只要求形态非空
+    # 强度不变：题位整个缺失、某轴为空、id 查不到、名字没落进文件，四条都仍然会失败。
     $axisLabel = @{ domain = '领域'; form = '形态' }
     $missing = @()
-    foreach ($s in @('A', 'B')) {
+    foreach ($slotDef in @($pools.slots)) {
+        $s = [string]$slotDef.id
         $p = $pick.picks.$s
         if (-not $p) { $missing += "题位 $s 的抽签结果整个缺失"; continue }
         $axes = @('form')
-        if ($s -eq 'A') { $axes = @('domain', 'form') }
+        if ($slotDef.picksDomain) { $axes = @('domain', 'form') }
         foreach ($axis in $axes) {
             $id = [string]$p.$axis
             if (-not $id) { $missing += ('题位 {0} 的{1}为空' -f $s, $axisLabel[$axis]); continue }
             $item = if ($axis -eq 'domain') { $domainById[$id] } else { $formById[$id] }
             if (-not $item) { $missing += ('题位 {0} 的{1} id「{2}」在 pools.json 里查不到' -f $s, $axisLabel[$axis], $id); continue }
-            if ($text -notmatch [regex]::Escape([string]$item.name)) { $missing += ('题位 {0} 的{1}「{2}」' -f $s, $axisLabel[$axis], $item.name) }
+            # 名字为空/纯空白时 [regex]::Escape('') = ''，而 `$text -notmatch ''` 恒为 $false，
+            # 这一轴会**静默通过** —— 池子里写了个 "name": ""，主完整性检查就哑了。
+            # 池子内容由 tools\test-pools.ps1 守着非空（那边也补了断言），这里当场判失败兜底。
+            $nm = [string]$item.name
+            if ([string]::IsNullOrWhiteSpace($nm)) {
+                $missing += ('题位 {0} 的{1} id「{2}」的 name 为空（pools.json 里没写名字，无法核对是否落进文件）' -f $s, $axisLabel[$axis], $id)
+                continue
+            }
+            if ($text -notmatch [regex]::Escape($nm)) { $missing += ('题位 {0} 的{1}「{2}」' -f $s, $axisLabel[$axis], $nm) }
         }
     }
     if ($missing.Count -gt 0) {
