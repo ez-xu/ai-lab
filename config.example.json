@@ -1,13 +1,13 @@
 {
     "enabled": true,
     "time": "07:30",
-    "timeBudgetMinutes": 150,
-    "focus": "2 breadth + 2 framework",
+    "timeBudgetMinutes": 90,
+    "focus": "1 breadth + 1 framework",
     "level": "L2",
     "profile": "headless",
     "dshPath": "",
-    "taskName": "AI-Lab-Daily-FourTasks",
-    "legacyTaskNames": [],
+    "taskName": "AI-Lab-Daily-TwoTasks",
+    "legacyTaskNames": ["AI-Lab-Daily-FourTasks"],
     "workdaysOnly": true,
     "holidaysFile": "holidays.json"
 }

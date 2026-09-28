@@ -1,5 +1,5 @@
 ﻿<#
-  install-task.ps1 — 注册/重装 Windows 计划任务：AI-Lab-Daily-FourTasks
+  install-task.ps1 — 注册/重装 Windows 计划任务：AI-Lab-Daily-TwoTasks
 
   用法：powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\install-task.ps1
         powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\install-task.ps1 -At 08:00
@@ -22,7 +22,7 @@ $root     = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'config.ps1')
 $cfgPath  = Get-AiLabConfigPath -Root $root
 $cfg      = Get-AiLabConfig -Root $root
-$taskName = if ($cfg.taskName) { $cfg.taskName } else { 'AI-Lab-Daily-FourTasks' }
+$taskName = if ($cfg.taskName) { $cfg.taskName } else { 'AI-Lab-Daily-TwoTasks' }
 $script   = Join-Path $PSScriptRoot 'daily-generate.ps1'
 $psExe    = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 . (Join-Path $PSScriptRoot 'calendar.ps1')   # 只为用 Format-DaysOfWeekMask
@@ -67,7 +67,7 @@ $principal = New-ScheduledTaskPrincipal -UserId ('{0}\{1}' -f $env:USERDOMAIN, $
 
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
     -Settings $settings -Principal $principal -Force `
-    -Description 'AI-Lab 每日四题：周一至周五 07:30 自动生成四道开发任务（2 广度 + 2 框架）；周末与法定节假日跳过' | Out-Null
+    -Description 'AI-Lab 每日两题：周一至周五 07:30 自动生成两道开发任务（题 A 广度 + 题 B 框架）；周末与法定节假日跳过' | Out-Null
 
 # 4) 让开关状态与计划任务一致
 if ($cfg.enabled) { Enable-ScheduledTask  -TaskName $taskName | Out-Null }
@@ -77,7 +77,7 @@ $t = Get-ScheduledTask -TaskName $taskName
 $i = Get-ScheduledTaskInfo -TaskName $taskName
 $days = Format-DaysOfWeekMask -Mask ([int]$t.Triggers[0].DaysOfWeek)
 Write-Host ''
-Write-Host '  [注册完成] AI-Lab 每日四题' -ForegroundColor Green
+Write-Host '  [注册完成] AI-Lab 每日两题' -ForegroundColor Green
 Write-Host "  任务名   : $taskName"
 Write-Host "  状态     : $($t.State)"
 Write-Host "  触发     : 每周 $days 的 $At（StartWhenAvailable，开机补跑）"
