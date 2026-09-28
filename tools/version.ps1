@@ -4,7 +4,7 @@
   用法：
       powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\version.ps1 -Action status
       powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\version.ps1 -Action log
-      powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\version.ps1 -Action bump -Part patch -Message "day 3: 完成四题"
+      powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\version.ps1 -Action bump -Part patch -Message "day 3: 完成两题"
       powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\version.ps1 -Action bump -Part minor -Message "新增领域池" -Push
 
   版本号规则（vMAJOR.MINOR.PATCH，从 v0.0.0 起）：

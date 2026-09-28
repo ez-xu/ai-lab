@@ -1,5 +1,5 @@
 ﻿<#
-  toggle.ps1 — AI-Lab 每日四题：一键开关 + 状态 + 日历预览
+  toggle.ps1 — AI-Lab 每日两题：一键开关 + 状态 + 日历预览
 
   用法：
       powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\toggle.ps1 -Action status
@@ -53,7 +53,7 @@ function Get-TaskState($taskName) {
 }
 
 $cfg       = Read-Cfg
-$taskName  = if ($cfg.taskName) { $cfg.taskName } else { 'AI-Lab-Daily-FourTasks' }
+$taskName  = if ($cfg.taskName) { $cfg.taskName } else { 'AI-Lab-Daily-TwoTasks' }
 $today     = (Get-Date).ToString('yyyy-MM-dd')
 $todayFile = Join-Path $root ('daily\{0}.md' -f $today)
 $logFile   = Join-Path $root ('logs\generate-{0}.log' -f $today)
@@ -67,7 +67,7 @@ switch ($Action) {
         try { Enable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null; $msg = '计划任务已启用' }
         catch { $msg = "计划任务未注册或启用失败（$($_.Exception.Message)）——可运行 tools\install-task.ps1 注册" }
         Write-Host ''
-        Write-Host '  [已开启] AI-Lab 每日四题自动生成' -ForegroundColor Green
+        Write-Host '  [已开启] AI-Lab 每日两题自动生成' -ForegroundColor Green
         Write-Host "  config.enabled = true ；$msg"
         Write-Host "  周一至周五 $($cfg.time) 自动生成；周末与法定节假日跳过；当天文件已存在则跳过"
     }
@@ -77,7 +77,7 @@ switch ($Action) {
         try { Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null; $msg = '计划任务已禁用' }
         catch { $msg = "计划任务未注册或禁用失败（$($_.Exception.Message)）" }
         Write-Host ''
-        Write-Host '  [已关闭] AI-Lab 每日四题自动生成' -ForegroundColor Yellow
+        Write-Host '  [已关闭] AI-Lab 每日两题自动生成' -ForegroundColor Yellow
         Write-Host "  config.enabled = false ；$msg"
         Write-Host '  仍可手动出题：在 DSH GUI 里说「布置今天的任务」'
     }
@@ -100,7 +100,7 @@ switch ($Action) {
         $t    = Get-TaskState $taskName
         $kind = Get-DayKind -When (Get-Date) -Calendar $cal
         Write-Host ''
-        Write-Host '  === AI-Lab 每日四题 · 状态 ===' -ForegroundColor Cyan
+        Write-Host '  === AI-Lab 每日两题 · 状态 ===' -ForegroundColor Cyan
         Write-Host ("  自动生成开关 : {0}" -f $(if ($cfg.enabled) { '开启 (enabled=true)' } else { '关闭 (enabled=false)' }))
         Write-Host ("  计划任务     : {0}" -f $(if ($t.Exists) { "$taskName / $($t.State)" } else { '未注册（运行 tools\install-task.ps1 注册）' }))
         if ($t.Exists) {

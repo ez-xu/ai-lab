@@ -1,11 +1,11 @@
-# AI-Lab · 每日四题
+# AI-Lab · 每日两题
 
-每天早上自动生成**四道开发任务**，练两件事：
+每天早上自动生成**两道开发任务**，练两件事：
 
 - **眼界** —— 见过多少系统原型（题 A，广度）
 - **框架能力** —— 能不能自己搭起结构（题 B，框架）
 
-领域不限，广度题从 **60 个领域**里抽签。**只在周一至周五出题**，周六、周日、法定节假日休息。
+领域不限，广度题从 `tools\pools.json` 的领域池里抽签（容量见该文件）。**只在周一至周五出题**，周六、周日、法定节假日休息。
 默认 **7:30** 自动生成，可一键开关。
 
 ## 快速开始
@@ -17,7 +17,8 @@
 git clone https://github.com/<你的账号>/ai-lab.git
 cd ai-lab
 
-# 1) 自检：抽签 31 项断言 + 日历 35 个用例（不需要 dsh）
+# 1) 自检：池子结构 + 抽签行为 + 日历（不需要 dsh）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-pools.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-pick.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-calendar.ps1
 
@@ -31,39 +32,51 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\daily-generate.ps1
 首次运行会自动从 `config.example.json` 生成 `config.json`——**它不入库**，因为里面是本机路径。
 换出题时间用 `install-task.ps1 -At 08:00`；不想装计划任务就只手动跑第 3 步。
 
-## 每天的四题
+想改课程结构或抽签规则，先读设计文档：`docs\specs\`（模型与规则的设计）、`docs\plans\`（实施计划）。
+只想每天照着做题，就不用管它们。让 agent 接手出题 / 复盘 / 开关的接口在 `skill\SKILL.md`。
 
-| 题号 | 类型 | 时间盒 | 练什么 |
-|---|---|---|---|
-| **A1** | 广度 · 主修 | 45–60 分钟 | 亲手跑起来、改一处、讲清机制 |
-| **A2** | 广度 · 快练 | 20–30 分钟 | 快速扩词汇量：一个概念 / 一个系统 / 一组对比 |
-| **B1** | 框架 · 主修 | 45–60 分钟 | 从模糊需求到可运行结构 |
-| **B2** | 框架 · 快练 | 20–30 分钟 | 小切口练判断力：微设计 / 代码考古 / 一份 ADR |
+## 每天的两题
 
-合计 130–180 分钟。**时间不够按 A1 → B1 → A2 → B2 的顺序停**，并在 `PROGRESS.md` 写清停在哪。
+每天固定两道：**题位 A 广度 + 题位 B 框架**。时间盒**不是固定的**——每题由抽签从三档里抽一个
+（**微练 / 快练 / 主修**），**两题的档位必然不同**；档位只缩放深度、不换形态。
+
+| 题位 | 类型 | 形态池 | 时间盒 | 练什么 |
+|---|---|---|---|---|
+| **A** | 广度 | A 形态池（见 `tools\pools.json`） | 抽签决定，与题 B 不同档 | 亲手跑起来、改一处、讲清机制；扩词汇量 |
+| **B** | 框架 | B 形态池（同上） | 抽签决定，与题 A 不同档 | 从模糊需求到可运行结构；小切口练判断力 |
+
+两题合计由抽签决定：最重的一天是「快练 + 主修」，合计 **65–90 分钟**。
+**时间不够按 A → B 的顺序停**（先做广度题，再做框架题），并在 `PROGRESS.md` 写清停在哪。
+三档各自的分钟数与配比见 `tools\pools.json` 的 `tiers`——本文档不复述这些数字。
 
 ## 题目是怎么抽出来的
 
-每天的四道题由 **4 根轴**组合而成，全部由 `tools\pick.ps1` 按日期确定性抽出：
+每天的两道题由 **4 根轴**组合而成，全部由 `tools\pick.ps1` 按日期确定性抽出：
 
 | 轴 | 池子 | 说明 |
 |---|---|---|
-| **领域** | 60 | 今天碰哪个方向（只有 A 题绑领域） |
-| **形态** | A 12 种 / B 16 种 | 这题是什么打法（拆经典 / 源码走读 / 接口设计 / 失败模式设计…） |
-| **载体** | 12 | 从哪里取材（源码 / 论文 / RFC / 手册 / 事故复盘 / 你自己的代码…） |
-| **约束** | 16 | 加一条硬性做法（必须度量 / 零依赖 / 必须给反例…） |
+| **领域** | 见 `tools\pools.json` 的 `domains` | 今天碰哪个方向（只有题位 A 绑领域） |
+| **形态** | 见 `aForms` / `bForms` | 这题是什么打法（拆经典 / 源码走读 / 接口设计 / 失败模式设计…） |
+| **载体** | 见 `carriers` | 从哪里取材（源码 / 论文 / RFC / 手册 / 事故复盘 / 你自己的代码…） |
+| **约束** | 见 `twists` | 加一条硬性做法（必须度量 / 零依赖 / 必须给反例…） |
+
+**池子容量、档位分钟数、配比与冷却窗口都不在本文件里**——唯一事实源是 `tools\pools.json`，
+本文档只描述机制、不复述数字（复述就会漂开）。
 
 **为什么不让 AI 自己选题**：模型自由选题时有很强的先验，会反复落回数据库 / 操作系统 / 网络
-这几个它最熟的领域——池子从 18 扩到 60 也没用，瓶颈不是池子而是采样的人。所以选题权被拿走了。
+这几个它最熟的领域——池子从 18 扩到 60 也没用（当前容量见 `tools\pools.json`），瓶颈不是池子而是采样的人。
+所以选题权被拿走了。
 
-抽签的三个性质：
+抽签的几个性质：
 
 - **确定性**：同一日期 + 同一历史 → 永远同一组结果（可复现、可回归测试）
 - **看起来随机**：排序键是 `SHA256(日期|题位|轴|候选id)`，不是简单轮转
-- **有冷却期**：领域 56 抽内不重复（30 个工作日覆盖 59/60 个领域）、载体 8 抽、约束 6 抽
-- **同日不重复是硬保证**：四题的载体、约束互不相同，A1/A2 领域不同
+- **有冷却期**：各轴的窗口数值见 `tools\pools.json` 的 `cooldown`
+- **两题档位必然不同**：抽档是无放回的，一天不会出现两个同档的题
+- **同日不重复是硬保证**：两题的载体、约束互不相同
 
-改池子或冷却窗口 → 编辑 `tools\pools.json`，然后跑 `tools\test-pick.ps1`（31 项断言）。
+改池子或冷却窗口 → 编辑 `tools\pools.json`，然后跑 `tools\test-pools.ps1`（池子结构）与
+`tools\test-pick.ps1`（抽签行为：配比 / 互异 / 兼容 / 容量 / 覆盖 / 反漂移扫描）。
 
 ## 怎么用
 
@@ -84,27 +97,30 @@ ai-lab\
 ├─ README.md               ← 本文件
 ├─ LICENSE                 ← MIT
 ├─ CHANGELOG.md            ← 版本历史
-├─ CURRICULUM.md           ← 课程体系：四题结构、4 根抽签轴、60 领域池、能力阶梯、硬规则
+├─ CURRICULUM.md           ← 课程体系：两题结构、4 根抽签轴、池子摘要、能力阶梯、硬规则（数字以 `tools\pools.json` 为准）
 ├─ PROGRESS.md             ← 打卡表 + 当前档位 + 连击
 ├─ queue.md                ← 种子题库 & 你想练的方向（可随时增删）
 ├─ config.example.json     ← 配置模板（首次运行会复制成 config.json）
 ├─ config.json             ← 开关与参数（enabled / time / level / taskName ...）· 不入库
 ├─ holidays.json           ← 出题日历：法定节假日 + 例外上班/休息日
 ├─ examples\               ← 一份样例产出（脱敏，用 {{ROOT}} 占位）
-├─ daily\YYYY-MM-DD.md     ← 每天四题（含验收标准、提示、复盘问题）· 不入库
-├─ daily\YYYY-MM-DD\       ← 你当天的产物（A1\ A2\ B1\ B2\）· 不入库
+├─ docs\                   ← 设计规格与计划（specs / plans）
+├─ skill\                  ← agent 接口层：出题 / 复盘 / 运维技能（`SKILL.md`）
+├─ daily\YYYY-MM-DD.md     ← 每天两题（含验收标准、提示、复盘问题）· 不入库
+├─ daily\YYYY-MM-DD\       ← 你当天的产物（A\ B\）· 不入库
 ├─ state\history.json      ← 抽签历史（冷却期的依据；删掉 = 重置冷却）· 不入库
 ├─ templates\daily-task.md ← 出题模板
 ├─ reviews\                ← 复盘归档 · 不入库
 ├─ logs\                   ← 运行日志 · 不入库
 └─ tools\                  ← 所有可执行工具
-    ├─ pools.json              ← ★ 抽签池：60 领域 + 28 形态 + 12 载体 + 16 约束 + 冷却窗口
-    ├─ pick.ps1                ← ★ 抽签引擎（按日期确定性抽，含冷却期防重复）
+    ├─ pools.json              ← ★ 唯一事实源：档位 / 题位 / 领域 / 形态 / 载体 / 约束 / 冷却窗口
+    ├─ pick.ps1                ← ★ 抽签引擎（按日期确定性抽，含档位互异与冷却期防重复）
     ├─ prompt.md               ← 出题教练的提示词（想改出题风格就改这里）
     ├─ config.ps1              ← 配置读取（config.json 缺失时从模板自动生成）
     ├─ calendar.ps1            ← 出题日历判定（生成器与开关共用）
     ├─ daily-generate.ps1      ← 生成器（计划任务调用）
-    ├─ test-pick.ps1           ← 抽签自检（31 项断言 + 覆盖率报告）
+    ├─ test-pools.ps1          ← 池子结构自检（键 / 容量 / allowedTiers / 锚点…）
+    ├─ test-pick.ps1           ← 抽签行为自检（配比 / 互异 / 兼容 / 容量 / 覆盖 / 反漂移）
     ├─ test-calendar.ps1       ← 日历自检（35 个已知用例）
     ├─ normalize-encoding.ps1  ← 编码规范化（.ps1 补 BOM / .json 去 BOM）
     ├─ toggle.ps1              ← 开关 / 状态 / 日历预览
@@ -119,7 +135,7 @@ ai-lab\
 
 ## 自动化说明
 
-- **计划任务名**：`AI-Lab-Daily-FourTasks`
+- **计划任务名**：`AI-Lab-Daily-TwoTasks`
 - **触发**：**周一至周五** 07:30（勾了 `StartWhenAvailable`：7:30 电脑没开，开机后补跑一次）
 - **节假日**：`daily-generate.ps1` 读 `holidays.json`，周末与法定节假日直接跳过（日志里记原因）
 - **幂等**：当天文件已存在就跳过，不会覆盖你正在做的东西
@@ -148,7 +164,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\toggle.ps1 -Action c
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\pick.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\pick.ps1 -Date 2026-09-28 -NoWrite
 
-# 自检：抽签 31 项断言 + 覆盖率报告 / 日历 35 个用例
+# 自检：池子结构 / 抽签行为 + 覆盖率报告 / 日历 35 个用例
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-pools.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-pick.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-calendar.ps1
 
@@ -161,19 +178,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\install-task.ps1
 
 ### 改抽签范围
 
-想加领域、加形态、调防重复力度，都改 `tools\pools.json` 一个文件：
+想加领域、加形态、调防重复力度，都改 `tools\pools.json` 一个文件——**档位、题位、形态、载体、
+约束、领域、冷却窗口全在里面，这里不复述它的数字**（复述就会漂开）：
 
-```jsonc
-"cooldown": {
-  "domain": 56,        // 领域 56 抽内不重复（30 个工作日覆盖 59/60 个领域）
-  "aFormMain": 5, "aFormQuick": 5,
-  "bFormMain": 8, "bFormQuick": 6,
-  "carrier": 8, "twist": 6
-}
-```
+- 加池子：往对应的数组里追加一项；形态还要写 `what` / `deliverable` / `carriers`（兼容载体），
+  以及可选的 `allowedTiers`（能落在哪几档，不写 = 三档都支持）
+- 调防重复力度：改 `cooldown` 里对应轴的窗口
 
-改完**必须**跑 `tools\test-pick.ps1`。里面有一条容量断言：池子必须比冷却窗口大得够多，
-否则快练题会被锁死（这个坑踩过一次，所以固化成断言了）。
+改完**必须**跑 `tools\test-pools.ps1` 与 `tools\test-pick.ps1`。后者有一条容量断言：池子必须比
+冷却窗口大得够多，否则快练档的题会被锁死（这个坑踩过一次，所以固化成断言了）。
 
 > 想重置冷却期：删掉 `state\history.json` 即可（下次出题从零开始）。
 
@@ -201,7 +214,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\install-task.ps1
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\version.ps1 -Action status
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\version.ps1 -Action log
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\version.ps1 -Action bump -Part patch -Message "day 1: 完成四题"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\version.ps1 -Action bump -Part patch -Message "day 1: 完成两题"
 ```
 
 > 本机环境里 git 可能被注入残缺的 `GIT_CONFIG_COUNT`（缺配对的 `GIT_CONFIG_KEY_*`），会让 git 直接

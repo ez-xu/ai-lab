@@ -4,10 +4,39 @@
 
 | 版本 | 日期 | 类型 | 说明 |
 |---|---|---|---|
+| v1.0.0 | 2026-09-28 | **major** | **破坏性**：每日四题 → 每日两题；时间盒改为三档抽签（两题必然不同档）；形态池 A 20 / B 24；`tools\pools.json` v3 成为唯一事实源；抽签历史升 v2（`A`/`B` + `tier`）；技能并入 `skill\`；计划任务更名 `AI-Lab-Daily-TwoTasks` |
 | v0.3.0 | 2026-09-23 | minor | 公开发布准备：路径参数化 `{{ROOT}}`、运行态移出版本控制、新增 `tools\config.ps1` 配置层、LICENSE、`examples\` 样例 |
 | v0.2.0 | 2026-09-23 | minor | 选题权从 AI 手里拿走：**4 根抽签轴 + 确定性抽签引擎**；领域池 18→60、形态 14→28、新增载体池 12 与约束池 16 |
 | v0.1.0 | 2026-09-23 | minor | 每日两题 → **每日四题**；`scripts\` → `tools\`；工作日 + 法定节假日日历；git 版本管理；删除测试题 |
 | v0.0.0 | 2026-09-23 | 基线 | 初始导入：每日两题（1 广度 + 1 框架），每天 7:30 自动生成，含两道测试题 |
+
+---
+
+## v1.0.0 — 2026-09-28
+
+**目标**：把「每日四题」压成「每日两题」（题位 A 广度 + 题位 B 框架），时间盒由固定改为三档抽签；
+同时把出题技能仓库并进本仓库，出题规则的唯一事实源收敛到 `tools\pools.json`。
+四题模型的问题不是题少，是**每天做不完**——两题 + 三档抽签让"最轻的一天只占半小时"成为常态。
+
+**破坏性变更**：每日四题 → 每日两题；形态池扁平化并扩充；时间盒改为三档抽签。
+
+- **BREAKING**: 日程由「A1+A2+B1+B2 四题」改为「题位 A 广度 + 题位 B 框架」两题
+- **BREAKING**: 时间盒由固定改为抽签（微练 / 快练 / 主修，两题档位必然不同）
+- **BREAKING**: `state/history.json` 升到 v2（槽位键 `A1/A2/B1/B2` → `A/B`，每题新增 `tier`）；旧文件归档为 `history.v1.json`
+- **feat**: 形态池 A 12 → 20、B 16 → 24；新增 16 个形态
+- **feat**: `tools/pools.json` 升到 v3，成为出题规则的唯一事实源（档位、题位、形态、`allowedTiers`、冷却）
+- **feat**: 新增 `tools/test-pools.ps1` 结构断言；`tools/test-pick.ps1` 重写为七类断言（含反漂移扫描）
+- **feat**: 技能 `daily-dev-task` 并入本仓库 `skill/` 子目录（原 `ez-xu/daily-dev-task` 归档）
+- **chore**: 计划任务更名 `AI-Lab-Daily-TwoTasks`，旧任务自动清理
+
+**迁移**
+
+- `daily\2026-09-23.md`、`daily\2026-09-24.md` → `daily\_archive-4task\`（保留可追溯，不删）
+- `state\history.json` → `state\history.v1.json`，新的 v2 从零开始计冷却
+- `PROGRESS.md` 打卡表改为 7 列（`题A 广度` / `题B 框架` / `档位组合`），旧四题记录移入「旧四题模型记录」小节
+- `config.json`：`timeBudgetMinutes` 150 → 90、`focus` 改为 `1 breadth + 1 framework`
+- `examples\` 样例换成本次引擎真实产出的两题文件（`examples\2026-09-28.md`，路径脱敏为 `{{ROOT}}`）
+- `CURRICULUM.md` / `README.md` 里复述的容量与分钟数全部改为指向 `tools\pools.json`（文档只讲机制，不复述数字）
 
 ---
 
