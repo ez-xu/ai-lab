@@ -1046,10 +1046,20 @@ git commit -m "chore(migrate): 归档四题时代的 daily 与抽签历史，打
 - **chore**: 计划任务更名 `AI-Lab-Daily-TwoTasks`，旧任务自动清理
 ```
 
+- [ ] **Step 3b: 清除运行脚本与示例里的陈旧文案（Task 8 带出的计划缺口）**
+
+全仓库扫描后，以下文件的「每日四题」文案**不在原计划任何任务的授权范围内**，必须在本次一并处理：
+
+- `tools\toggle.ps1` — 第 2 行文件头注释与第 70/80 行的开关提示都写「AI-Lab 每日四题」；第 56 行的后备任务名 `'AI-Lab-Daily-FourTasks'` 要改为新名。**这是用户最常看到的界面**（技能与 README 都让用户跑 `toggle.ps1 -Action status`），不改就会在一个两题系统里打印「每日四题」。
+- `tools\version.ps1` — 第 7 行附近的用法示例里若出现题量描述，同步为两题。
+- `examples\2026-09-23.md` — 旧四题模型的示例输出。重出一份两题示例，或在文件头加一行说明它是历史示例。二选一，别留成"看起来是当前格式的错样子"。
+- **不要动** `daily\_archive-4task\` 下的文件、`daily\2026-09-28.md`（当天真题，其内容本身就在讲迁移）、`docs\` 下的计划与规格（它们按设计描述历史）、以及 `config*.json` 里的 `legacyTaskNames`（那正是旧名，理应存在）。
+
 - [ ] **Step 4: 提交并打 tag**
 
 ```powershell
-git add CURRICULUM.md README.md CHANGELOG.md
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\normalize-encoding.ps1
+git add CURRICULUM.md README.md CHANGELOG.md tools/toggle.ps1 tools/version.ps1 examples/
 git commit -m "docs: 同步两题模型与 v1.0.0 变更日志"
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\version.ps1 -Action bump -Part major -Message "v1.0.0: 两仓库合一 + 每日两题 + 形态池扩充"
 ```
